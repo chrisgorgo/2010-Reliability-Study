@@ -98,3 +98,4 @@ main_pipeline.connect([(subjects_infosource, datasource, [('subject_id', 'subjec
                        ])
 
 main_pipeline.run()
+main_pipeline.write_graph()

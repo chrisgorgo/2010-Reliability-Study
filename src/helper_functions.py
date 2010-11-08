@@ -67,9 +67,9 @@ def create_model_fit_pipeline(contrasts, high_pass_filter_cutoff=120):
     
     for i, contrast in enumerate(contrasts):
         
-        select = pe.Node(interface=Select(index=[i]),name=contrast[0] + "_select")
+        select = pe.Node(interface=Select(index=[i]),name=contrast[0].replace("-","_minus_") + "_select")
 
-        threshold = pe.Node(interface= spm.Threshold(contrast_index=i+1), name=contrast[0] + "_threshold")
+        threshold = pe.Node(interface= spm.Threshold(contrast_index=i+1), name=contrast[0].replace("-","_minus_") + "_threshold")
         
         model_pipeline.connect([
                                 (contrastestimate, select, [('spmT_images', 'inlist')]),                           
