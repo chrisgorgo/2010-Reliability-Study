@@ -2,10 +2,11 @@ import os
 import nipype.interfaces.utility as util     # utility
 import nipype.pipeline.engine as pe          # pypeline engine
 import nipype.interfaces.io as nio           # Data i/o
-from nipype.interfaces import fsl
 from helper_functions import create_pipeline_functional_run
 
 from confidential_variables import subjects
+from nipype.interfaces.utility import Merge
+import neuroutils
 
 data_dir = os.path.abspath('/media/data/2010reliability/')
 
@@ -82,19 +83,37 @@ line_bisection = create_pipeline_functional_run(name="line_bisection",
                                                              ('Control','T', ['Control'],[1])],
                                                   units='secs')
 
+mergeinputs = pe.Node(interface=Merge(5), name="mergeinputs")
+
+psmerge = pe.Node(interface = neuroutils.PsMerge(), name = "psmerge")
+psmerge.inputs.out_file = "merged.eps"
+
 main_pipeline = pe.Workflow(name="pipeline")
 main_pipeline.base_dir = os.path.join(data_dir,"workdir")
-main_pipeline.connect([(subjects_infosource, datasource, [('subject_id', 'subject_id')]),
+main_pipeline.connect([
+                       (subjects_infosource, datasource, [('subject_id', 'subject_id')]),
+                       
                        (datasource, finger_foot_lips, [("finger_foot_lips", "inputnode.func"),
                                                        ("T1","inputnode.struct")]),
+                       (finger_foot_lips, mergeinputs, [("report.psmerge.merged_file", "in1")]),
+                       
                        (datasource, overt_verb_generation, [("verb_generation", "inputnode.func"),
                                                             ("T1","inputnode.struct")]),
+                       (overt_verb_generation, mergeinputs, [("report.psmerge.merged_file", "in2")]),
+                       
                        (datasource, silent_verb_generation, [("silent_verb_generation", "inputnode.func"),
                                                             ("T1","inputnode.struct")]),
+                       (silent_verb_generation, mergeinputs, [("report.psmerge.merged_file", "in3")]),
+                       
                        (datasource, overt_word_repetition, [("word_repetition", "inputnode.func"),
                                                             ("T1","inputnode.struct")]),
+                       (overt_word_repetition, mergeinputs, [("report.psmerge.merged_file", "in4")]),
+                       
                        (datasource, line_bisection, [("line_bisection", "inputnode.func"),
                                                      ("T1","inputnode.struct")]),
+                       (line_bisection, mergeinputs, [("report.psmerge.merged_file", "in5")]),
+                       
+                       (mergeinputs, psmerge, [("out", "in_files")])
                        ])
 
 main_pipeline.run()
