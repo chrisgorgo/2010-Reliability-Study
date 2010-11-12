@@ -124,12 +124,15 @@ def create_visualise_masked_overlay(pipeline_name, name, contrasts):
                                ])
     return visualise_overlay
 
-def create_visualise_thresholded_overlay(name):
+def create_visualise_thresholded_overlay(pipeline_name, name, contrasts):
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['background', "overlays"]), name="inputnode")
     
     reslice_overlay = pe.Node(interface=spm.Coregister(), name="reslice_overlay")
     reslice_overlay.inputs.jobtype="write"
     reslice_overlay.inputs.write_interp = 0
+    
+    plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay', 'title'])
+    plot.inputs.title = [(pipeline_name + ": " + contrast[0]) for contrast in contrasts]
     
     #plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay'])
     
@@ -138,8 +141,8 @@ def create_visualise_thresholded_overlay(name):
     visualise_overlay.connect([
                                (inputnode,reslice_overlay, [("background","target"),
                                                            ("overlays","source")]),
-     #                          (reslice_overlay, plot, [("coregistered_source", "overlay")]),
-      #                         (inputnode, plot, [("background", "background")])
+                               (reslice_overlay, plot, [("coregistered_source", "overlay")]),
+                               (inputnode, plot, [("background", "background")])
                              
                                ])
     return visualise_overlay
@@ -148,10 +151,11 @@ def create_report_pipeline(pipeline_name, contrasts):
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['struct', "raw_stat_images", "thresholded_stat_images", "mask"]), name="inputnode")
     
     raw_stat_visualise = create_visualise_masked_overlay(pipeline_name=pipeline_name, contrasts=contrasts, name="raw_stat")
-    thresholded_stat_visualise = create_visualise_thresholded_overlay(name="thresholded_stat")
+    thresholded_stat_visualise = create_visualise_thresholded_overlay(pipeline_name=pipeline_name, contrasts=contrasts, name="thresholded_stat")
     
-    psmerge = pe.Node(interface = neuroutils.PsMerge(), name = "psmerge")
-    psmerge.inputs.out_file = "merged.eps"
+    psmerge_raw = pe.Node(interface = neuroutils.PsMerge(), name = "psmerge_raw")
+    psmerge_raw.inputs.out_file = "merged.pdf"
+    psmerge_th = psmerge_raw.clone(name="psmerge_th")
     
     report = pe.Workflow(name="report")
     
@@ -161,7 +165,9 @@ def create_report_pipeline(pipeline_name, contrasts):
                                                      ("mask", "inputnode.mask")]),
                     (inputnode, thresholded_stat_visualise, [("struct", "inputnode.background"),
                                                              ("thresholded_stat_images", "inputnode.overlays")]),
-                    (raw_stat_visualise, psmerge, [("plot.plot", "in_files")])
+                                                             
+                    (raw_stat_visualise, psmerge_raw, [("plot.plot", "in_files")]),
+                    (thresholded_stat_visualise, psmerge_th, [("plot.plot", "in_files")])
                                                     
                     ])
     return report

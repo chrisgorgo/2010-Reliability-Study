@@ -83,10 +83,12 @@ line_bisection = create_pipeline_functional_run(name="line_bisection",
                                                              ('Control','T', ['Control'],[1])],
                                                   units='secs')
 
-mergeinputs = pe.Node(interface=Merge(5), name="mergeinputs")
+mergeinputs = pe.Node(interface=Merge(10), name="mergeinputs")
 
 psmerge = pe.Node(interface = neuroutils.PsMerge(), name = "psmerge")
-psmerge.inputs.out_file = "merged.eps"
+
+def getReportFilename(subject_id):
+    return "subject_%s_report.epdf"%subject_id
 
 main_pipeline = pe.Workflow(name="pipeline")
 main_pipeline.base_dir = os.path.join(data_dir,"workdir")
@@ -95,25 +97,31 @@ main_pipeline.connect([
                        
                        (datasource, finger_foot_lips, [("finger_foot_lips", "inputnode.func"),
                                                        ("T1","inputnode.struct")]),
-                       (finger_foot_lips, mergeinputs, [("report.psmerge.merged_file", "in1")]),
+                       (finger_foot_lips, mergeinputs, [("report.psmerge_raw.merged_file", "in1")]),
+                       (finger_foot_lips, mergeinputs, [("report.psmerge_th.merged_file", "in2")]),
                        
                        (datasource, overt_verb_generation, [("verb_generation", "inputnode.func"),
                                                             ("T1","inputnode.struct")]),
-                       (overt_verb_generation, mergeinputs, [("report.psmerge.merged_file", "in2")]),
+                       (overt_verb_generation, mergeinputs, [("report.psmerge_raw.merged_file", "in3")]),
+                       (overt_verb_generation, mergeinputs, [("report.psmerge_th.merged_file", "in4")]),
                        
                        (datasource, silent_verb_generation, [("silent_verb_generation", "inputnode.func"),
                                                             ("T1","inputnode.struct")]),
-                       (silent_verb_generation, mergeinputs, [("report.psmerge.merged_file", "in3")]),
+                       (silent_verb_generation, mergeinputs, [("report.psmerge_raw.merged_file", "in5")]),
+                       (silent_verb_generation, mergeinputs, [("report.psmerge_th.merged_file", "in6")]),
                        
                        (datasource, overt_word_repetition, [("word_repetition", "inputnode.func"),
                                                             ("T1","inputnode.struct")]),
-                       (overt_word_repetition, mergeinputs, [("report.psmerge.merged_file", "in4")]),
+                       (overt_word_repetition, mergeinputs, [("report.psmerge_raw.merged_file", "in7")]),
+                       (overt_word_repetition, mergeinputs, [("report.psmerge_th.merged_file", "in8")]),
                        
                        (datasource, line_bisection, [("line_bisection", "inputnode.func"),
                                                      ("T1","inputnode.struct")]),
-                       (line_bisection, mergeinputs, [("report.psmerge.merged_file", "in5")]),
+                       (line_bisection, mergeinputs, [("report.psmerge_raw.merged_file", "in9")]),
+                       (line_bisection, mergeinputs, [("report.psmerge_th.merged_file", "in10")]),
                        
-                       (mergeinputs, psmerge, [("out", "in_files")])
+                       (mergeinputs, psmerge, [("out", "in_files")]),
+                       (subjects_infosource, psmerge, [(("subject_id", getReportFilename), "out_file")])
                        ])
 
 main_pipeline.run()
