@@ -2,7 +2,7 @@ import os
 import nipype.interfaces.utility as util     # utility
 import nipype.pipeline.engine as pe          # pypeline engine
 import nipype.interfaces.io as nio           # Data i/o
-from helper_functions import create_pipeline_functional_run
+from neuroutils.helper_functions import create_pipeline_functional_run, create_dwi_pipeline
 
 from confidential_variables import subjects
 from nipype.interfaces.utility import Merge
@@ -29,7 +29,7 @@ datasource = pe.Node(interface=nio.DataGrabber(infields=['subject_id'],
                      name = 'datasource')
 
 datasource.inputs.base_directory = data_dir
-datasource.inputs.template = 'E10800_CONTROL/*_%s/*/*%s.nii'
+datasource.inputs.template = 'E10800_CONTROL/%s_*/*/*%s.nii'
 datasource.inputs.field_template = dict(dwi_bval=datasource.inputs.template.replace("nii", "bval"),
                                         dwi_bvec=datasource.inputs.template.replace("nii", "bvec"))
 datasource.inputs.template_args = info
@@ -83,6 +83,8 @@ line_bisection = create_pipeline_functional_run(name="line_bisection",
                                                              ('Control','T', ['Control'],[1])],
                                                   units='secs')
 
+proc_dwi = create_dwi_pipeline()
+
 mergeinputs = pe.Node(interface=Merge(20), name="mergeinputs")
 
 psmerge = pe.Node(interface = neuroutils.PsMerge(), name = "psmerge")
@@ -97,41 +99,45 @@ main_pipeline.connect([
                        
                        (datasource, finger_foot_lips, [("finger_foot_lips", "inputnode.func"),
                                                        ("T1","inputnode.struct")]),
-                       (finger_foot_lips, mergeinputs, [("preproc_func.plot_realign.plot", "in1")]),                                
-                       (finger_foot_lips, mergeinputs, [("report.psmerge_raw.merged_file", "in2")]),
-                       (finger_foot_lips, mergeinputs, [("report.psmerge_th.merged_file", "in3")]),
-                       (finger_foot_lips, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in4")]),
+#                       (finger_foot_lips, mergeinputs, [("preproc_func.plot_realign.plot", "in1")]),                                
+#                       (finger_foot_lips, mergeinputs, [("report.psmerge_raw.merged_file", "in2")]),
+#                       (finger_foot_lips, mergeinputs, [("report.psmerge_th.merged_file", "in3")]),
+#                       (finger_foot_lips, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in4")]),
+#                       
+#                       (datasource, overt_verb_generation, [("verb_generation", "inputnode.func"),
+#                                                            ("T1","inputnode.struct")]),
+#                       (overt_verb_generation, mergeinputs, [("preproc_func.plot_realign.plot", "in5")]),
+#                       (overt_verb_generation, mergeinputs, [("report.psmerge_raw.merged_file", "in6")]),
+#                       (overt_verb_generation, mergeinputs, [("report.psmerge_th.merged_file", "in7")]),
+#                       (overt_verb_generation, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in8")]),
+#                       
+#                       (datasource, silent_verb_generation, [("silent_verb_generation", "inputnode.func"),
+#                                                            ("T1","inputnode.struct")]),
+#                       (silent_verb_generation, mergeinputs, [("preproc_func.plot_realign.plot", "in9")]),
+#                       (silent_verb_generation, mergeinputs, [("report.psmerge_raw.merged_file", "in10")]),
+#                       (silent_verb_generation, mergeinputs, [("report.psmerge_th.merged_file", "in11")]),
+#                       (silent_verb_generation, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in12")]),
+#                       
+#                       (datasource, overt_word_repetition, [("word_repetition", "inputnode.func"),
+#                                                            ("T1","inputnode.struct")]),
+#                       (overt_word_repetition, mergeinputs, [("preproc_func.plot_realign.plot", "in13")]),
+#                       (overt_word_repetition, mergeinputs, [("report.psmerge_raw.merged_file", "in14")]),
+#                       (overt_word_repetition, mergeinputs, [("report.psmerge_th.merged_file", "in15")]),
+#                       (overt_word_repetition, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in16")]),
+#                       
+#                       (datasource, line_bisection, [("line_bisection", "inputnode.func"),
+#                                                     ("T1","inputnode.struct")]),
+#                       (line_bisection, mergeinputs, [("preproc_func.plot_realign.plot", "in17")]),
+#                       (line_bisection, mergeinputs, [("report.psmerge_raw.merged_file", "in18")]),
+#                       (line_bisection, mergeinputs, [("report.psmerge_th.merged_file", "in19")]),
+#                       (line_bisection, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in20")]),
                        
-                       (datasource, overt_verb_generation, [("verb_generation", "inputnode.func"),
-                                                            ("T1","inputnode.struct")]),
-                       (overt_verb_generation, mergeinputs, [("preproc_func.plot_realign.plot", "in5")]),
-                       (overt_verb_generation, mergeinputs, [("report.psmerge_raw.merged_file", "in6")]),
-                       (overt_verb_generation, mergeinputs, [("report.psmerge_th.merged_file", "in7")]),
-                       (overt_verb_generation, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in8")]),
+                       (datasource, proc_dwi, [("dwi", "inputnode.dwi"),
+                                               ("dwi_bval", "inputnode.bvals"),
+                                               ("dwi_bvec", "inputnode.bvecs")]),
                        
-                       (datasource, silent_verb_generation, [("silent_verb_generation", "inputnode.func"),
-                                                            ("T1","inputnode.struct")]),
-                       (silent_verb_generation, mergeinputs, [("preproc_func.plot_realign.plot", "in9")]),
-                       (silent_verb_generation, mergeinputs, [("report.psmerge_raw.merged_file", "in10")]),
-                       (silent_verb_generation, mergeinputs, [("report.psmerge_th.merged_file", "in11")]),
-                       (silent_verb_generation, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in12")]),
-                       
-                       (datasource, overt_word_repetition, [("word_repetition", "inputnode.func"),
-                                                            ("T1","inputnode.struct")]),
-                       (overt_word_repetition, mergeinputs, [("preproc_func.plot_realign.plot", "in13")]),
-                       (overt_word_repetition, mergeinputs, [("report.psmerge_raw.merged_file", "in14")]),
-                       (overt_word_repetition, mergeinputs, [("report.psmerge_th.merged_file", "in15")]),
-                       (overt_word_repetition, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in16")]),
-                       
-                       (datasource, line_bisection, [("line_bisection", "inputnode.func"),
-                                                     ("T1","inputnode.struct")]),
-                       (line_bisection, mergeinputs, [("preproc_func.plot_realign.plot", "in17")]),
-                       (line_bisection, mergeinputs, [("report.psmerge_raw.merged_file", "in18")]),
-                       (line_bisection, mergeinputs, [("report.psmerge_th.merged_file", "in19")]),
-                       (line_bisection, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in20")]),
-                       
-                       (mergeinputs, psmerge, [("out", "in_files")]),
-                       (subjects_infosource, psmerge, [(("subject_id", getReportFilename), "out_file")])
+#                       (mergeinputs, psmerge, [("out", "in_files")]),
+#                       (subjects_infosource, psmerge, [(("subject_id", getReportFilename), "out_file")])
                        ])
 
 main_pipeline.run()
