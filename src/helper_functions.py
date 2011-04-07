@@ -11,7 +11,7 @@ from nipype.interfaces.utility import Merge
 from nipype.interfaces.nipy.model import FitGLM, EstimateContrast
 from nipype.interfaces.nipy.preprocess import ComputeMask
 from neuroutils.bootstrapping import PermuteTimeSeries
-from nipype.workflows.fsl.dti import create_bedpostx_pipeline, create_eddy_correct_pipeline
+from nipype.workflows.fsl import create_bedpostx_pipeline, create_eddy_correct_pipeline, create_susan_smooth
 
 import numpy as np
 
@@ -76,8 +76,10 @@ def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sp
     coregister = pe.Node(interface=spm.Coregister(), name="coregister")
     coregister.inputs.jobtype= "estimate"
     
-    smooth = pe.Node(interface=spm.Smooth(), name="smooth")
-    smooth.iterables = ('fwhm', [[8, 8, 8], [0,0,0]])
+#    smooth = pe.Node(interface=spm.Smooth(), name="smooth")
+#    smooth.iterables = ('fwhm', [[8, 8, 8], [0,0,0]])
+    smooth = create_susan_smooth()
+    smooth.inputs.inputnode.fwhm = 8
     
     art = pe.Node(interface=ra.ArtifactDetect(), name="art")
     art.inputs.use_differences      = [True,True]
@@ -114,7 +116,8 @@ def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sp
                           (ta, slice_timing, [("ta", "time_acquisition")]),     
                           (slice_timing, realign, [("timecorrected_files", "in_files")]),
                           
-                          (coregister, smooth, [("coregistered_files","in_files")]),
+                          (coregister, smooth, [("coregistered_files","inputnode.in_file")]),
+                          (compute_mask, smooth,[('brain_mask','inputnode.mask_file')]),
                           (compute_mask,art,[('brain_mask','mask_file')]),
                           (realign,art,[('realignment_parameters','realignment_parameters')]),
                           (realign,art,[('realigned_files','realigned_files')]),
