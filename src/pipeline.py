@@ -13,21 +13,24 @@ from nipype.utils.config import config
 from StringIO import StringIO
 
 config.readfp(StringIO("""
+[logging]
+workflow_level = DEBUG
+filemanip_level = DEBUG
+interface_level = DEBUG
+
 [execution]
 stop_on_first_crash = true
+stop_on_first_rerun = true
 hash_method = timestamp
-plugin = IPython
+remove_unnecessary_outputs = false
+#plugin = IPython
 """))
 
 
 data_dir = os.path.abspath('/media/data/2010reliability/')
 
 info = dict(T1 = [['subject_id','[0-9]_co_COR_3D_IR_PREP']],
-            word_repetition = [['subject_id','[0-9]_word_repetition']],
-            verb_generation = [['subject_id','[0-9]_verb_generation']],
-            silent_verb_generation = [['subject_id', '[0-9]_silent_verb_generation']],
-            line_bisection = [['subject_id', '[0-9]_line_bisection']],
-            finger_foot_lips = [['subject_id', '[0-9]_finger_foot_lips']],
+            func = [['subject_id','task_name']],
             dwi = [['subject_id', '[0-9]_DTI_64G_2.0_mm_isotropic']],
             dwi_bval = [['subject_id', '[0-9]_DTI_64G_2.0_mm_isotropic']],
             dwi_bvec = [['subject_id', '[0-9]_DTI_64G_2.0_mm_isotropic']])
@@ -36,66 +39,74 @@ subjects_infosource = pe.Node(interface=util.IdentityInterface(fields=['subject_
                      name="subjects_infosource")
 subjects_infosource.iterables = ('subject_id', subjects)
 
-datasource = pe.Node(interface=nio.DataGrabber(infields=['subject_id'],
+tasks_infosource = pe.Node(interface=util.IdentityInterface(fields=['task_name']),
+                     name="tasks_infosource")
+tasks = ["finger_foot_lips"]#, "word_repetition", "verb_generation", "silent_verb_generation", "line_bisection", ]
+tasks_infosource.iterables = ('task_name', tasks)
+
+datasource = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'task_name'],
                                                outfields=info.keys()),
                      name = 'datasource')
 
 datasource.inputs.base_directory = data_dir
 datasource.inputs.template = 'E10800_CONTROL/%s_*/*/*%s.nii'
 datasource.inputs.field_template = dict(dwi_bval=datasource.inputs.template.replace("nii", "bval"),
-                                        dwi_bvec=datasource.inputs.template.replace("nii", "bvec"))
+                                        dwi_bvec=datasource.inputs.template.replace("nii", "bvec"),
+                                        func = 'E10800_CONTROL/%s_*/*/*[0-9]_%s.nii')
 datasource.inputs.template_args = info
 
-finger_foot_lips = create_pipeline_functional_run(name="finger_foot_lips", 
-                                                  conditions=['Finger', 'Foot', 'Lips'], 
-                                                  onsets=[[0, 36, 72, 108, 144],
-                                                          [12, 48, 84, 120, 156],
-                                                          [24, 60, 96, 132, 168]],
-                                                  durations=[[6], [6], [6]],
-                                                  tr=2.5, 
-                                                  contrasts=[('Finger','T', ['Finger'],[1]),
-                                                             ('Foot','T', ['Foot'],[1]),
-                                                             ('Lips','T', ['Lips'],[1])],
-                                                  units='scans')
+functional_run = create_pipeline_functional_run()
 
-overt_verb_generation = create_pipeline_functional_run(name="overt_verb_generation", 
-                                                  conditions=['Task'], 
-                                                  onsets=[[0, 12, 24, 36, 48, 60, 72]],
-                                                  durations=[[6]],
-                                                  tr=5.0, 
-                                                  contrasts=[('Task','T', ['Task'],[1])],
-                                                  units='scans',
-                                                  sparse=True)
+#finger_foot_lips = create_pipeline_functional_run(name="finger_foot_lips", 
+#                                                  conditions=['Finger', 'Foot', 'Lips'], 
+#                                                  onsets=[[0, 36, 72, 108, 144],
+#                                                          [12, 48, 84, 120, 156],
+#                                                          [24, 60, 96, 132, 168]],
+#                                                  durations=[[6], [6], [6]],
+#                                                  tr=2.5, 
+#                                                  contrasts=[('Finger','T', ['Finger'],[1]),
+#                                                             ('Foot','T', ['Foot'],[1]),
+#                                                             ('Lips','T', ['Lips'],[1])],
+#                                                  units='scans')
+#
+#overt_verb_generation = create_pipeline_functional_run(name="overt_verb_generation", 
+#                                                  conditions=['Task'], 
+#                                                  onsets=[[0, 12, 24, 36, 48, 60, 72]],
+#                                                  durations=[[6]],
+#                                                  tr=5.0, 
+#                                                  contrasts=[('Task','T', ['Task'],[1])],
+#                                                  units='scans',
+#                                                  sparse=True)
+#
+#silent_verb_generation = create_pipeline_functional_run(name="silent_verb_generation", 
+#                                                  conditions=['Task'], 
+#                                                  onsets=[[0, 24, 48, 72, 96, 120, 144]],
+#                                                  durations=[[12]],
+#                                                  tr=2.5, 
+#                                                  contrasts=[('Task','T', ['Task'],[1])],
+#                                                  units='scans')
+#
+#overt_word_repetition = create_pipeline_functional_run(name="overt_word_repetition", 
+#                                                  conditions=['Task'], 
+#                                                  onsets=[[0, 12, 24, 36, 48, 60]],
+#                                                  durations=[[6]],
+#                                                  tr=5.0, 
+#                                                  contrasts=[('Task','T', ['Task'],[1])],
+#                                                  units='scans',
+#                                                  sparse=True)
+#
+#line_bisection = create_pipeline_functional_run(name="line_bisection", 
+#                                                  conditions=['Task', 'Control'], 
+#                                                  onsets=[[  16.25,   81.25,  146.25,  211.25,  276.25,  341.25,  406.25, 471.25, 536.25],
+#                                                          [  48.75,  113.75,  178.75,  243.75,  308.75,  373.75,  438.75, 503.75, 568.75]],
+#                                                  durations=[[16.25], [16.25]],
+#                                                  tr=2.5, 
+#                                                  contrasts=[('Task-Control','T', ['Task', 'Control'],[1,-1]),
+#                                                             ('Task','T', ['Task'],[1]),
+#                                                             ('Control','T', ['Control'],[1])],
+#                                                  units='secs')
 
-silent_verb_generation = create_pipeline_functional_run(name="silent_verb_generation", 
-                                                  conditions=['Task'], 
-                                                  onsets=[[0, 24, 48, 72, 96, 120, 144]],
-                                                  durations=[[12]],
-                                                  tr=2.5, 
-                                                  contrasts=[('Task','T', ['Task'],[1])],
-                                                  units='scans')
-
-overt_word_repetition = create_pipeline_functional_run(name="overt_word_repetition", 
-                                                  conditions=['Task'], 
-                                                  onsets=[[0, 12, 24, 36, 48, 60]],
-                                                  durations=[[6]],
-                                                  tr=5.0, 
-                                                  contrasts=[('Task','T', ['Task'],[1])],
-                                                  units='scans',
-                                                  sparse=True)
-
-line_bisection = create_pipeline_functional_run(name="line_bisection", 
-                                                  conditions=['Task', 'Control'], 
-                                                  onsets=[[  16.25,   81.25,  146.25,  211.25,  276.25,  341.25,  406.25, 471.25, 536.25],
-                                                          [  48.75,  113.75,  178.75,  243.75,  308.75,  373.75,  438.75, 503.75, 568.75]],
-                                                  durations=[[16.25], [16.25]],
-                                                  tr=2.5, 
-                                                  contrasts=[('Task-Control','T', ['Task', 'Control'],[1,-1]),
-                                                             ('Task','T', ['Task'],[1]),
-                                                             ('Control','T', ['Control'],[1])],
-                                                  units='secs')
-
-finger_foot_lips_seed = create_prepare_seeds_from_fmri_pipeline("finger_foot_lips_seed")
+seed = create_prepare_seeds_from_fmri_pipeline("seed")
 
 proc_dwi = create_dwi_pipeline()
 
@@ -107,12 +118,12 @@ def getReportFilename(subject_id):
     return "subject_%s_report.pdf"%subject_id
 
 def getConditions(task_name):
-    conditions_dict = {'finger_feet_lips': ['Finger', 'Foot', 'Lips'], 
+    conditions_dict = {'finger_foot_lips': ['Finger', 'Foot', 'Lips'], 
                        "overt_verb_generation": ['Task']}
     return conditions_dict[task_name]
     
 def getOnsets(task_name):
-    onsets_dict = {'finger_feet_lips': [[0, 36, 72, 108, 144],
+    onsets_dict = {'finger_foot_lips': [[0, 36, 72, 108, 144],
                                         [12, 48, 84, 120, 156],
                                         [24, 60, 96, 132, 168]], 
                    "overt_verb_generation": [[0, 12, 24, 36, 48, 60, 72]]}
@@ -120,39 +131,75 @@ def getOnsets(task_name):
 
     
 def getDurations(task_name):
-    durations_dict = {'finger_feet_lips': [[6], [6], [6]], 
-                   "overt_verb_generation": [[6]]}
+    durations_dict = {'finger_foot_lips': [[6], [6], [6]], 
+                      "overt_verb_generation": [[6]]}
     return durations_dict[task_name]
 
 def getTR(task_name):
-    tr_dict = {'finger_feet_lips': 2.5, 
-                   "overt_verb_generation": 2.5}
+    tr_dict = {'finger_foot_lips': 2.5, 
+               'overt_verb_generation': 2.5}
     return tr_dict[task_name]
+
+def getContrasts(task_name):
+    contrasts_dict = {'finger_foot_lips': [('Finger','T', ['Finger'],[1]),
+                                           ('Foot','T', ['Foot'],[1]),
+                                           ('Lips','T', ['Lips'],[1])], 
+               'overt_verb_generation': [('Task','T', ['Task'],[1])]}
+    return contrasts_dict[task_name]
+
+def getStatLabels(task_name):
+    contrasts_dict = {'finger_foot_lips': ['Finger','Foot','Lips'], 
+               'overt_verb_generation': ['overt_verb_generation']}
+    return contrasts_dict[task_name]
+
+def getUnits(task_name):
+    units_dict = {'finger_foot_lips': 'scans', 
+               'overt_verb_generation': 'scans'}
+    return units_dict[task_name]
+
+def getSparse(task_name):
+    sparse_dict = {'finger_foot_lips': False, 
+               'overt_verb_generation': True}
+    return sparse_dict[task_name]
 
 main_pipeline = pe.Workflow(name="pipeline")
 main_pipeline.base_dir = os.path.join(data_dir,"workdir")
 main_pipeline.connect([
                        (subjects_infosource, datasource, [('subject_id', 'subject_id')]),
-                       (task_infosource, datasource, [('task_name', 'task_name')]),
-                       
-                       
-                       (datasource, finger_foot_lips, [("finger_foot_lips", "inputnode.func"),
+                       (tasks_infosource, datasource, [('task_name', 'task_name')]),
+                                             
+                       (datasource, functional_run, [("func", "inputnode.func"),
                                                        ("T1","inputnode.struct")]),
-                       (task_infosource, functional_run, [(('task_name', getConditions), 'conditions')] )
-#                       (finger_foot_lips, finger_foot_lips_seed, [("preproc_func.coregister.coregistered_source","inputnode.epi"),
-#                                                                  ("preproc_func.compute_mask.brain_mask", "inputnode.mask"),
-#                                                                  ("model.contrastestimate.spmT_images","inputnode.stat"),
-#                                                                  ]),
-#                       (datasource, finger_foot_lips_seed, [("dwi", "inputnode.dwi"),
-#                                                            ("T1", "inputnode.T1")]),
+                       (tasks_infosource, functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
+                                                          (('task_name', getOnsets), 'inputnode.onsets'),
+                                                          (('task_name', getDurations), 'inputnode.durations'),
+                                                          (('task_name', getTR), 'inputnode.TR'),
+                                                          (('task_name', getContrasts), 'inputnode.contrasts'),
+                                                          (('task_name', getUnits), 'inputnode.units'),
+                                                          (('task_name', getSparse), 'inputnode.sparse'),
+                                                          ('task_name', 'inputnode.task_name')]),
+                                                          
+                        (datasource, proc_dwi, [("dwi", "inputnode.dwi"),
+                                               ("dwi_bval", "inputnode.bvals"),
+                                               ("dwi_bvec", "inputnode.bvecs")]),
+                       (proc_dwi, seed, [("bedpostx.outputnode.thsamples", "inputnode.thsamples"),
+                                                          ("bedpostx.outputnode.phsamples", "inputnode.phsamples"),
+                                                          ("bedpostx.outputnode.fsamples", "inputnode.fsamples")]),
+                       (functional_run, seed, [("preproc_func.coregister.coregistered_source","inputnode.epi"),
+                                               ("preproc_func.compute_mask.brain_mask", "inputnode.mask"),
+                                               ("model.contrastestimate.spmT_images","inputnode.stat"),
+                                                                  ]),
+                       (datasource, seed, [("dwi", "inputnode.dwi"),
+                                           ("T1", "inputnode.T1")]),
+                       (tasks_infosource, seed, [(('task_name', getStatLabels), 'inputnode.stat_labels')]),
 #                       
 #                       (finger_foot_lips, mergeinputs, [("preproc_func.plot_realign.plot", "in1")]),                                
 #                       (finger_foot_lips, mergeinputs, [("report.psmerge_raw.merged_file", "in2")]),
 #                       (finger_foot_lips, mergeinputs, [("report.psmerge_th.merged_file", "in3")]),
 #                       (finger_foot_lips, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in4")]),
 #                       
-                       (datasource, overt_verb_generation, [("verb_generation", "inputnode.func"),
-                                                            ("T1","inputnode.struct")]),
+#                       (datasource, overt_verb_generation, [("verb_generation", "inputnode.func"),
+#                                                            ("T1","inputnode.struct")]),
 #                       (overt_verb_generation, mergeinputs, [("preproc_func.plot_realign.plot", "in5")]),
 #                       (overt_verb_generation, mergeinputs, [("report.psmerge_raw.merged_file", "in6")]),
 #                       (overt_verb_generation, mergeinputs, [("report.psmerge_th.merged_file", "in7")]),
@@ -179,17 +226,11 @@ main_pipeline.connect([
 #                       (line_bisection, mergeinputs, [("report.psmerge_th.merged_file", "in19")]),
 #                       (line_bisection, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in20")]),
 #                       
-#                       (datasource, proc_dwi, [("dwi", "inputnode.dwi"),
-#                                               ("dwi_bval", "inputnode.bvals"),
-#                                               ("dwi_bvec", "inputnode.bvecs")]),
-#                       (proc_dwi, finger_foot_lips_seed, [("bedpostx.outputnode.thsamples", "inputnode.thsamples"),
-#                                                          ("bedpostx.outputnode.phsamples", "inputnode.phsamples"),
-#                                                          ("bedpostx.outputnode.fsamples", "inputnode.fsamples")]),
+
 #                       
 #                       (mergeinputs, psmerge, [("out", "in_files")]),
 #                       (subjects_infosource, psmerge, [(("subject_id", getReportFilename), "out_file")])
                        ])
 
-#main_pipeline.run()
-main_pipeline.write_graph(graph2use='flat')
-main_pipeline.write_hierarchical_dot("hierarchical.dot")
+main_pipeline.run()
+main_pipeline.write_graph()
