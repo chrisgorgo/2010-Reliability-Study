@@ -2,7 +2,7 @@ import os
 import nipype.interfaces.utility as util     # utility
 import nipype.pipeline.engine as pe          # pypeline engine
 import nipype.interfaces.io as nio           # Data i/o
-from neuroutils.helper_functions import (create_pipeline_functional_run, 
+from helper_functions import (create_pipeline_functional_run, 
                                          create_dwi_pipeline,
                                          create_prepare_seeds_from_fmri_pipeline)
 
@@ -51,7 +51,7 @@ first_session_datasource = pe.Node(interface=nio.DataGrabber(infields=['subject_
 
 first_session_datasource.inputs.base_directory = data_dir
 first_session_datasource.inputs.template = '%s/%s/%s/*.img'
-#first_session_datasource.inputs.field_template = dict(
+first_session_datasource.inputs.field_template = dict(T1= '%s/%s/%s/co*.img')
 #                                                      #dwi_bval=first_session_datasource.inputs.template.replace("nii", "bval"),
 #                                        #dwi_bvec=first_session_datasource.inputs.template.replace("nii", "bvec"),
 #                                        func = '%s_*/*/*[0-9]_%s.nii'
@@ -60,7 +60,8 @@ first_session_datasource.inputs.template_args = info
 
 second_session_datasource = first_session_datasource.clone(name = 'second_session_datasource')
 
-functional_run = create_pipeline_functional_run()
+first_session_functional_run = create_pipeline_functional_run(name="first_session_functional_run")
+second_session_functional_run = create_pipeline_functional_run(name="second_session_functional_run")
 
 #finger_foot_lips = create_pipeline_functional_run(name="finger_foot_lips", 
 #                                                  conditions=['Finger', 'Foot', 'Lips'], 
@@ -123,12 +124,12 @@ def getReportFilename(subject_id):
     return "subject_%s_report.pdf"%subject_id
 
 def getConditions(task_name):
-    conditions_dict = {'finger_foot_lips': ['Finger', 'Foot', 'Lips'], 
+    conditions_dict = {'motor': ['Finger', 'Foot', 'Lips'], 
                        "overt_verb_generation": ['Task']}
     return conditions_dict[task_name]
     
 def getOnsets(task_name):
-    onsets_dict = {'finger_foot_lips': [[0, 36, 72, 108, 144],
+    onsets_dict = {'motor': [[0, 36, 72, 108, 144],
                                         [12, 48, 84, 120, 156],
                                         [24, 60, 96, 132, 168]], 
                    "overt_verb_generation": [[0, 12, 24, 36, 48, 60, 72]]}
@@ -136,34 +137,34 @@ def getOnsets(task_name):
 
     
 def getDurations(task_name):
-    durations_dict = {'finger_foot_lips': [[6], [6], [6]], 
+    durations_dict = {'motor': [[6], [6], [6]], 
                       "overt_verb_generation": [[6]]}
     return durations_dict[task_name]
 
 def getTR(task_name):
-    tr_dict = {'finger_foot_lips': 2.5, 
+    tr_dict = {'motor': 2.5, 
                'overt_verb_generation': 2.5}
     return tr_dict[task_name]
 
 def getContrasts(task_name):
-    contrasts_dict = {'finger_foot_lips': [('Finger','T', ['Finger'],[1]),
+    contrasts_dict = {'motor': [('Finger','T', ['Finger'],[1]),
                                            ('Foot','T', ['Foot'],[1]),
                                            ('Lips','T', ['Lips'],[1])], 
                'overt_verb_generation': [('Task','T', ['Task'],[1])]}
     return contrasts_dict[task_name]
 
 def getStatLabels(task_name):
-    contrasts_dict = {'finger_foot_lips': ['Finger','Foot','Lips'], 
+    contrasts_dict = {'motor': ['Finger','Foot','Lips'], 
                'overt_verb_generation': ['overt_verb_generation']}
     return contrasts_dict[task_name]
 
 def getUnits(task_name):
-    units_dict = {'finger_foot_lips': 'scans', 
+    units_dict = {'motor': 'scans', 
                'overt_verb_generation': 'scans'}
     return units_dict[task_name]
 
 def getSparse(task_name):
-    sparse_dict = {'finger_foot_lips': False, 
+    sparse_dict = {'motor': False, 
                'overt_verb_generation': True}
     return sparse_dict[task_name]
 
@@ -183,13 +184,32 @@ main_pipeline.connect([
                        (subjects_infosource, first_session_datasource, [('subject_id', 'subject_id'),
                                                                         (('subject_id', getFirstSessionId), 'session_id')]),
                        (tasks_infosource, first_session_datasource, [('task_name', 'task_name')]),
-                       
+                       (first_session_datasource, first_session_functional_run, [("func", "inputnode.func"),
+                                                                                 ("T1","inputnode.struct")]),
+                       (tasks_infosource, first_session_functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
+                                                                         (('task_name', getOnsets), 'inputnode.onsets'),
+                                                                         (('task_name', getDurations), 'inputnode.durations'),
+                                                                         (('task_name', getTR), 'inputnode.TR'),
+                                                                         (('task_name', getContrasts), 'inputnode.contrasts'),
+                                                                         (('task_name', getUnits), 'inputnode.units'),
+                                                                         (('task_name', getSparse), 'inputnode.sparse'),
+                                                                         ('task_name', 'inputnode.task_name')]),
+                                       
                        (subjects_infosource, second_session_datasource, [('subject_id', 'subject_id'),
                                                                         (('subject_id', getSecondSessionId), 'session_id')]),
                        (tasks_infosource, second_session_datasource, [('task_name', 'task_name')]),
+                       (first_session_datasource, second_session_functional_run, [("T1","inputnode.struct")]),
+                       (second_session_datasource, second_session_functional_run, [("func","inputnode.func")]),
+                       (tasks_infosource, second_session_functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
+                                                                          (('task_name', getOnsets), 'inputnode.onsets'),
+                                                                          (('task_name', getDurations), 'inputnode.durations'),
+                                                                          (('task_name', getTR), 'inputnode.TR'),
+                                                                          (('task_name', getContrasts), 'inputnode.contrasts'),
+                                                                          (('task_name', getUnits), 'inputnode.units'),
+                                                                          (('task_name', getSparse), 'inputnode.sparse'),
+                                                                          ('task_name', 'inputnode.task_name')]),
                                              
-#                       (datasource, functional_run, [("func", "inputnode.func"),
-#                                                       ("T1","inputnode.struct")]),
+
 #                       (tasks_infosource, functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
 #                                                          (('task_name', getOnsets), 'inputnode.onsets'),
 #                                                          (('task_name', getDurations), 'inputnode.durations'),
