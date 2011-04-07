@@ -3,6 +3,8 @@
 	<name>2010reliability</name>
 	<comment></comment>
 	<projects>
+		<project>neuroutils</project>
+		<project>nipype</project>
 	</projects>
 	<buildSpec>
 		<buildCommand>

@@ -27,33 +27,38 @@ remove_unnecessary_outputs = false
 """))
 
 
-data_dir = os.path.abspath('/media/data/2010reliability/')
+data_dir = os.path.abspath('/media/data/2010reliability/E10800_CONTROL')
 
-info = dict(T1 = [['subject_id','[0-9]_co_COR_3D_IR_PREP']],
-            func = [['subject_id','task_name']],
-            dwi = [['subject_id', '[0-9]_DTI_64G_2.0_mm_isotropic']],
-            dwi_bval = [['subject_id', '[0-9]_DTI_64G_2.0_mm_isotropic']],
-            dwi_bvec = [['subject_id', '[0-9]_DTI_64G_2.0_mm_isotropic']])
+info = dict(T1 = [['subject_id', 'session_id', 'T1']],
+            func = [['subject_id', 'session_id', 'task_name']],
+            #dwi = [['subject_id', 'session_id', '[0-9]_DTI_64G_2.0_mm_isotropic']],
+            #dwi_bval = [['subject_id', 'session_id', '[0-9]_DTI_64G_2.0_mm_isotropic']],
+            #dwi_bvec = [['subject_id', 'session_id', '[0-9]_DTI_64G_2.0_mm_isotropic']]
+            )
 
 subjects_infosource = pe.Node(interface=util.IdentityInterface(fields=['subject_id']),
-                     name="subjects_infosource")
+                              name="subjects_infosource")
 subjects_infosource.iterables = ('subject_id', subjects)
 
 tasks_infosource = pe.Node(interface=util.IdentityInterface(fields=['task_name']),
-                     name="tasks_infosource")
-tasks = ["finger_foot_lips"]#, "word_repetition", "verb_generation", "silent_verb_generation", "line_bisection", ]
+                           name="tasks_infosource")
+tasks = ["motor"]#, "word_repetition", "verb_generation", "silent_verb_generation", "line_bisection", ]
 tasks_infosource.iterables = ('task_name', tasks)
 
-datasource = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'task_name'],
+first_session_datasource = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'task_name', 'session_id'],
                                                outfields=info.keys()),
-                     name = 'datasource')
+                     name = 'first_session_datasource')
 
-datasource.inputs.base_directory = data_dir
-datasource.inputs.template = 'E10800_CONTROL/%s_*/*/*%s.nii'
-datasource.inputs.field_template = dict(dwi_bval=datasource.inputs.template.replace("nii", "bval"),
-                                        dwi_bvec=datasource.inputs.template.replace("nii", "bvec"),
-                                        func = 'E10800_CONTROL/%s_*/*/*[0-9]_%s.nii')
-datasource.inputs.template_args = info
+first_session_datasource.inputs.base_directory = data_dir
+first_session_datasource.inputs.template = '%s/%s/%s/*.img'
+#first_session_datasource.inputs.field_template = dict(
+#                                                      #dwi_bval=first_session_datasource.inputs.template.replace("nii", "bval"),
+#                                        #dwi_bvec=first_session_datasource.inputs.template.replace("nii", "bvec"),
+#                                        func = '%s_*/*/*[0-9]_%s.nii'
+#                                        )
+first_session_datasource.inputs.template_args = info
+
+second_session_datasource = first_session_datasource.clone(name = 'second_session_datasource')
 
 functional_run = create_pipeline_functional_run()
 
@@ -162,37 +167,52 @@ def getSparse(task_name):
                'overt_verb_generation': True}
     return sparse_dict[task_name]
 
+def getFirstSessionId(subject_id):
+    import os
+    data_dir = '/media/data/2010reliability/E10800_CONTROL'
+    return sorted(os.listdir(os.path.join(data_dir, subject_id)))[0]
+
+def getSecondSessionId(subject_id):
+    import os
+    data_dir = '/media/data/2010reliability/E10800_CONTROL'
+    return sorted(os.listdir(os.path.join(data_dir, subject_id)))[1]
+
 main_pipeline = pe.Workflow(name="pipeline")
 main_pipeline.base_dir = os.path.join(data_dir,"workdir")
 main_pipeline.connect([
-                       (subjects_infosource, datasource, [('subject_id', 'subject_id')]),
-                       (tasks_infosource, datasource, [('task_name', 'task_name')]),
+                       (subjects_infosource, first_session_datasource, [('subject_id', 'subject_id'),
+                                                                        (('subject_id', getFirstSessionId), 'session_id')]),
+                       (tasks_infosource, first_session_datasource, [('task_name', 'task_name')]),
+                       
+                       (subjects_infosource, second_session_datasource, [('subject_id', 'subject_id'),
+                                                                        (('subject_id', getSecondSessionId), 'session_id')]),
+                       (tasks_infosource, second_session_datasource, [('task_name', 'task_name')]),
                                              
-                       (datasource, functional_run, [("func", "inputnode.func"),
-                                                       ("T1","inputnode.struct")]),
-                       (tasks_infosource, functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
-                                                          (('task_name', getOnsets), 'inputnode.onsets'),
-                                                          (('task_name', getDurations), 'inputnode.durations'),
-                                                          (('task_name', getTR), 'inputnode.TR'),
-                                                          (('task_name', getContrasts), 'inputnode.contrasts'),
-                                                          (('task_name', getUnits), 'inputnode.units'),
-                                                          (('task_name', getSparse), 'inputnode.sparse'),
-                                                          ('task_name', 'inputnode.task_name')]),
-                                                          
-                        (datasource, proc_dwi, [("dwi", "inputnode.dwi"),
-                                               ("dwi_bval", "inputnode.bvals"),
-                                               ("dwi_bvec", "inputnode.bvecs")]),
-                       (proc_dwi, seed, [("bedpostx.outputnode.thsamples", "inputnode.thsamples"),
-                                                          ("bedpostx.outputnode.phsamples", "inputnode.phsamples"),
-                                                          ("bedpostx.outputnode.fsamples", "inputnode.fsamples")]),
-                       (functional_run, seed, [("preproc_func.coregister.coregistered_source","inputnode.epi"),
-                                               ("preproc_func.compute_mask.brain_mask", "inputnode.mask"),
-                                               ("model.contrastestimate.spmT_images","inputnode.stat"),
-                                                                  ]),
-                       (datasource, seed, [("dwi", "inputnode.dwi"),
-                                           ("T1", "inputnode.T1")]),
-                       (tasks_infosource, seed, [(('task_name', getStatLabels), 'inputnode.stat_labels')]),
-#                       
+#                       (datasource, functional_run, [("func", "inputnode.func"),
+#                                                       ("T1","inputnode.struct")]),
+#                       (tasks_infosource, functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
+#                                                          (('task_name', getOnsets), 'inputnode.onsets'),
+#                                                          (('task_name', getDurations), 'inputnode.durations'),
+#                                                          (('task_name', getTR), 'inputnode.TR'),
+#                                                          (('task_name', getContrasts), 'inputnode.contrasts'),
+#                                                          (('task_name', getUnits), 'inputnode.units'),
+#                                                          (('task_name', getSparse), 'inputnode.sparse'),
+#                                                          ('task_name', 'inputnode.task_name')]),
+#                                                          
+#                        (datasource, proc_dwi, [("dwi", "inputnode.dwi"),
+#                                               ("dwi_bval", "inputnode.bvals"),
+#                                               ("dwi_bvec", "inputnode.bvecs")]),
+#                       (proc_dwi, seed, [("bedpostx.outputnode.thsamples", "inputnode.thsamples"),
+#                                                          ("bedpostx.outputnode.phsamples", "inputnode.phsamples"),
+#                                                          ("bedpostx.outputnode.fsamples", "inputnode.fsamples")]),
+#                       (functional_run, seed, [("preproc_func.coregister.coregistered_source","inputnode.epi"),
+#                                               ("preproc_func.compute_mask.brain_mask", "inputnode.mask"),
+#                                               ("model.contrastestimate.spmT_images","inputnode.stat"),
+#                                                                  ]),
+#                       (datasource, seed, [("dwi", "inputnode.dwi"),
+#                                           ("T1", "inputnode.T1")]),
+#                       (tasks_infosource, seed, [(('task_name', getStatLabels), 'inputnode.stat_labels')]),
+##                       
 #                       (finger_foot_lips, mergeinputs, [("preproc_func.plot_realign.plot", "in1")]),                                
 #                       (finger_foot_lips, mergeinputs, [("report.psmerge_raw.merged_file", "in2")]),
 #                       (finger_foot_lips, mergeinputs, [("report.psmerge_th.merged_file", "in3")]),
