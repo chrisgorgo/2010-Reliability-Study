@@ -312,87 +312,6 @@ def _make_titles(task, contrasts, prefix=''):
         prefix += " "
     return [(prefix + task + ": " + contrast[0]) for contrast in contrasts]
 
-def create_visualise_masked_overlay(pipeline_name, name):#, contrasts):
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['background', "mask", "overlays", "contrasts", "task_name"]), name="inputnode")
-    
-    reslice_mask = pe.Node(interface=spm.Coregister(), name="reslice_mask")
-    reslice_mask.inputs.jobtype="write"
-    reslice_mask.inputs.write_interp = 0
-    
-    reslice_overlay = reslice_mask.clone(name="reslice_overlay")
-    
-
-    
-    plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay', 'title'])
-    plot.inputs.bbox = True
-    #plot.inputs.title = [(pipeline_name + ": " + contrast[0]) for contrast in contrasts]
-    plot.inputs.nrows = 12
-    
-    make_titles = pe.Node(interface=util.Function(input_names=['task','contrasts'], 
-                                                 output_names=['titles'], 
-                                                 function=_make_titles), name="make_titles")
-    
-    visualise_overlay = pe.Workflow(name="visualise_"+name)
-    
-    visualise_overlay.connect([
-                               (inputnode,reslice_overlay, [("background","target"),
-                                                           ("overlays","source")]),
-                               (inputnode,reslice_mask, [("background","target"),
-                                                           ("mask","source")]),
-                               (inputnode, make_titles, [('task_name', 'task'),
-                                                         ('contrasts', 'contrasts')]),
-                               (make_titles, plot, [('titles', 'title')]),
-                               (reslice_overlay, plot, [("coregistered_source", "overlay")]),
-                               (inputnode, plot, [("background", "background")]),
-                               (reslice_mask, plot, [("coregistered_source", "mask")]),
-                               ])
-    return visualise_overlay
-
-def create_visualise_thresholded_overlay(pipeline_name, name):#, contrasts):
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['background', "overlays", "contrasts", "task_name", 'prefix']), name="inputnode")
-    
-    reslice_overlay = pe.Node(interface=spm.Coregister(), name="reslice_overlay")
-    reslice_overlay.inputs.jobtype="write"
-    reslice_overlay.inputs.write_interp = 0
-    
-#    reslice_ggmm_overlay = reslice_overlay.clone(name="reslice_ggmm_overlay")
-    
-    plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay', 'title'])
-    make_titles = pe.Node(interface=util.Function(input_names=['task','contrasts', 'prefix'], 
-                                                 output_names=['titles'], 
-                                                 function=_make_titles), name="make_titles")
-    
-#    plot_ggmm = plot.clone("plot_ggmm")
-#    
-#    make_titles_ggmm = pe.Node(interface=util.Function(input_names=['task','contrasts', 'prefix'], 
-#                                                 output_names=['titles'], 
-#                                                 function=_make_titles), name="make_titles_ggmm")
-#    make_titles_ggmm.inputs.prefix = "Topo GGMM "
-    
-    #plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay'])
-    
-    visualise_overlay = pe.Workflow(name="visualise_"+name)
-    
-    visualise_overlay.connect([
-                               (inputnode,reslice_overlay, [("background","target"),
-                                                           ("overlays","source")]),
-#                               (inputnode,reslice_ggmm_overlay, [("background","target"),
-#                                                           ("ggmm_overlays","source")]),
-                               (reslice_overlay, plot, [("coregistered_source", "overlay")]),
-                               (inputnode, plot, [("background", "background")]),
-                               (inputnode, make_titles, [('task_name', 'task'),
-                                                         ('contrasts', 'contrasts'),
-                                                         ('prefix', 'prefix')]),
-                               (make_titles, plot, [('titles', 'title')]),
-                             
-#                               (reslice_ggmm_overlay, plot_ggmm, [("coregistered_source", "overlay")]),
-#                               (inputnode, plot_ggmm, [("background", "background")]),
-#                               (inputnode, make_titles_ggmm, [('task_name', 'task'),
-#                                                         ('contrasts', 'contrasts')]),
-#                               (make_titles_ggmm, plot_ggmm, [('titles', 'title')]),
-                               ])
-    return visualise_overlay
-
 def create_visualise_overlay(name, masked=False):#, contrasts):
     visualise_overlay = pe.Workflow(name=name)
     
@@ -414,7 +333,7 @@ def create_visualise_overlay(name, masked=False):#, contrasts):
                            (reslice_mask, plot, [("coregistered_source", "mask")]),
                            ])
     
-    reslice_overlay = pe.Node(interface=spm.Coregister(), name="reslice_overlay")
+    reslice_overlay = pe.MapNode(interface=spm.Coregister(), name="reslice_overlay", iterfield="source")
     reslice_overlay.inputs.jobtype="write"
     reslice_overlay.inputs.write_interp = 0
     
