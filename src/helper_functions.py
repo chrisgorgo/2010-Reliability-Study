@@ -4,10 +4,10 @@ import nipype.interfaces.spm as spm          # spm
 import nipype.interfaces.diffusion_toolkit as dt          # spm
 import nipype.algorithms.rapidart as ra      # artifact detection
 import nipype.algorithms.modelgen as model   # model specification
-from nipype.interfaces import fsl
+from nipype.interfaces import fsl, utility
 from nipype.interfaces.base import Bunch
 import neuroutils
-from nipype.interfaces.utility import Merge
+from nipype.interfaces.utility import Merge, Rename
 from nipype.interfaces.nipy.model import FitGLM, EstimateContrast
 from nipype.interfaces.nipy.preprocess import ComputeMask
 from neuroutils.bootstrapping import PermuteTimeSeries
@@ -39,6 +39,8 @@ def get_slice_order(volume):
 
 def get_ref_slice(volume):
     import nibabel as nb
+    if isinstance(volume,list) and len(volume) == 1:
+        volume = volume[0]
     nii = nb.load(volume)
     n_slices = nii.get_shape()[2]
     return n_slices/2
@@ -76,30 +78,25 @@ def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sp
     coregister = pe.Node(interface=spm.Coregister(), name="coregister")
     coregister.inputs.jobtype= "estimate"
     
-#    smooth = pe.Node(interface=spm.Smooth(), name="smooth")
-#    smooth.iterables = ('fwhm', [[8, 8, 8], [0,0,0]])
-    smooth = create_susan_smooth()
-    smooth.inputs.inputnode.fwhm = 8
+    smooth = pe.Node(interface=spm.Smooth(), name="smooth")
+    smooth.inputs.fwhm = [8, 8, 8]
+    susan_smooth = create_susan_smooth(name="susan_smooth")
+    susan_smooth.inputs.inputnode.fwhm = 8
     
     art = pe.Node(interface=ra.ArtifactDetect(), name="art")
-    art.inputs.use_differences      = [True,True]
+    art.inputs.use_differences      = [True,False]
     art.inputs.use_norm             = True
-    art.inputs.norm_threshold       = 0.5
+    art.inputs.norm_threshold       = 1
     art.inputs.zintensity_threshold = 3
     art.inputs.mask_type            = 'file'
     art.inputs.parameter_source     = 'SPM'
     
     compute_mask = pe.Node(interface=ComputeMask(), name="compute_mask")
     
-    plot_realign = pe.Node(interface=neuroutils.PlotRealignemntParameters(), name="plot_realign")
-    
     preproc_func = pe.Workflow(name="preproc_func")
     preproc_func.connect([
                           (inputnode,skip, [("func", "in_file")]),
                           
-                          (inputnode, coregister, [("struct", "target")]),
-                          (realign, coregister,[('mean_image', 'source'),
-                                                ('realigned_files','apply_to_files')]),
                           (coregister, compute_mask, [('coregistered_source','mean_volume')]),
                           (skip, slice_timing, [("roi_file", "in_files"),
                                                       (('roi_file', get_n_slices), "num_slices"),
@@ -115,14 +112,28 @@ def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sp
                           
                           (ta, slice_timing, [("ta", "time_acquisition")]),     
                           (slice_timing, realign, [("timecorrected_files", "in_files")]),
+#                          (skip, realign, [("roi_file", "in_files")]),
                           
-                          (coregister, smooth, [("coregistered_files","inputnode.in_file")]),
-                          (compute_mask, smooth,[('brain_mask','inputnode.mask_file')]),
+                          (inputnode, coregister, [("struct", "target")]),
+                          (realign, coregister,[('mean_image', 'source'),
+                                                ('realigned_files','apply_to_files')]),
+                          
+                          (coregister, susan_smooth, [("coregistered_files","inputnode.in_files")]),
+                          (compute_mask, susan_smooth,[('brain_mask','inputnode.mask_file')]),
+                          
+#                          (coregister, smooth, [("coregistered_files","in_files")]),
+                          
                           (compute_mask,art,[('brain_mask','mask_file')]),
                           (realign,art,[('realignment_parameters','realignment_parameters')]),
                           (realign,art,[('realigned_files','realigned_files')]),
-                          (realign,plot_realign, [('realignment_parameters', 'realignment_parameters')])
                           ])
+    
+    outputnode = pe.Node(interface=util.IdentityInterface(fields=['preproced_files', 'realignment_parameters', 'outlier_files', 'mask_file']), name="outputnode")
+    
+    preproc_func.connect(realign, 'realignment_parameters', outputnode, 'realignment_parameters')
+    preproc_func.connect(susan_smooth, 'outputnode.smoothed_files', outputnode, 'preproced_files')
+    preproc_func.connect(art, 'outlier_files', outputnode, 'outlier_files')
+    preproc_func.connect(compute_mask, 'brain_mask', outputnode, 'mask_file')
     
     return preproc_func
 
@@ -142,6 +153,8 @@ def _get_contrast_index(contrasts):
 
 def _get_microtime_resolution(volume, sparse):
     import nibabel as nb
+    if isinstance(volume,list) and len(volume) == 1:
+        volume = volume[0]
     nii = nb.load(volume)
     n_slices = nii.get_shape()[3]
     if sparse:
@@ -236,14 +249,35 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
         level1estimate.inputs.estimation_method = {'Classical' : 1}
         
         contrastestimate = pe.Node(interface = spm.EstimateContrast(), name="contrastestimate")
+        rename_t_maps = pe.MapNode(interface = Rename(format_string="%(contrast_name)s_t_map", keep_ext=True), name="rename_t_maps", iterfield=['in_file', 'contrast_name'] )
         #contrastestimate.inputs.contrasts = contrasts
         
-        threshold = pe.MapNode(interface= spm.Threshold(), name="threshold", iterfield=['contrast_index', 'stat_image'])
-        #threshold.inputs.contrast_index = range(1,len(contrasts)+1)
+        threshold_topo_fdr = pe.MapNode(interface= spm.Threshold(), name="threshold_topo_fdr", iterfield=['contrast_index', 'stat_image'])
+        #threshold_topo_fdr.inputs.contrast_index = range(1,len(contrasts)+1)
         
         threshold_topo_ggmm = neuroutils.CreateTopoFDRwithGGMM("threshold_topo_ggmm")
         #threshold_topo_ggmm.inputs.inputnode.contrast_index = range(1,len(contrasts)+1)
+        
+        merge_thr_methods = pe.MapNode(interface=utility.Merge(2),
+                         name='merge_thr_methods', iterfield=['in1', 'in2'])
+        model_pipeline.connect(threshold_topo_fdr, 'thresholded_map', merge_thr_methods, 'in1')
+        model_pipeline.connect(threshold_topo_ggmm, 'topo_fdr.thresholded_map', merge_thr_methods, 'in2')
+        select_thr_method = pe.MapNode(interface=utility.Select(), name="select_thr_method", iterfield=['inlist'])
+        model_pipeline.connect(merge_thr_methods, 'out', select_thr_method, 'inlist')
+        
+        thr_method_inputspec = pe.Node(interface=utility.IdentityInterface(fields=["thr_method"]), name="thr_method_inputspec")
+        
+        def chooseindex(thr_method):
+            return {"topo_fdr":0, "topo_ggmm":1}[thr_method]
     
+        model_pipeline.connect(thr_method_inputspec, ("thr_method", chooseindex), select_thr_method, 'index')
+        
+        threshold = pe.Node(interface=utility.IdentityInterface(fields=["thresholded_map"]), name="threshold")
+        
+        model_pipeline.connect(select_thr_method, 'out', threshold, 'thresholded_map')
+    
+        def getLabels(contrasts):
+            return [ contrast[0].lower() for contrast in contrasts]
         
         model_pipeline.connect([(modelspec, level1design,[('session_info','session_info')]),
                                 (inputnode, level1design, [('mask', 'mask_image'),
@@ -257,18 +291,25 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
                                 (level1estimate,contrastestimate,[('spm_mat_file','spm_mat_file'),
                                                                   ('beta_images','beta_images'),
                                                                   ('residual_image','residual_image')]),
-                                (contrastestimate, threshold, [('spm_mat_file','spm_mat_file'),
-                                                               ('spmT_images', 'stat_image')]),
-                                (inputnode, threshold, [(('contrasts', _get_contrast_index), 'contrast_index')]),
+                                
+                                (contrastestimate, rename_t_maps, [('spmT_images', 'in_file')]),
+                                (inputnode, rename_t_maps, [(('contrasts',getLabels), 'contrast_name')]),
+                                
+                                (contrastestimate, threshold_topo_fdr, [('spm_mat_file','spm_mat_file')]),
+                                (rename_t_maps, threshold_topo_fdr , [('out_file', 'stat_image')]),
+                                (inputnode, threshold_topo_fdr, [(('contrasts', _get_contrast_index), 'contrast_index')]),
+                                
                                 (level1estimate, threshold_topo_ggmm, [('mask_image','inputnode.mask_file')]),
-                                (contrastestimate, threshold_topo_ggmm, [('spm_mat_file','inputnode.spm_mat_file'),
-                                                                         ('spmT_images', 'inputnode.stat_image')]),
+                                (contrastestimate, threshold_topo_ggmm, [('spm_mat_file','inputnode.spm_mat_file')]),
+                                (rename_t_maps, threshold_topo_ggmm , [('out_file', 'inputnode.stat_image')]),
                                 (inputnode, threshold_topo_ggmm, [(('contrasts', _get_contrast_index), 'inputnode.contrast_index')]),
                                 ])
     
     return model_pipeline
 
 def _make_titles(task, contrasts, prefix=''):
+    if prefix and prefix[-1] != " ":
+        prefix += " "
     return [(prefix + task + ": " + contrast[0]) for contrast in contrasts]
 
 def create_visualise_masked_overlay(pipeline_name, name):#, contrasts):
@@ -291,7 +332,7 @@ def create_visualise_masked_overlay(pipeline_name, name):#, contrasts):
                                                  output_names=['titles'], 
                                                  function=_make_titles), name="make_titles")
     
-    visualise_overlay = pe.Workflow(name="visualise"+name)
+    visualise_overlay = pe.Workflow(name="visualise_"+name)
     
     visualise_overlay.connect([
                                (inputnode,reslice_overlay, [("background","target"),
@@ -308,84 +349,124 @@ def create_visualise_masked_overlay(pipeline_name, name):#, contrasts):
     return visualise_overlay
 
 def create_visualise_thresholded_overlay(pipeline_name, name):#, contrasts):
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['background', "overlays", "ggmm_overlays", "contrasts", "task_name"]), name="inputnode")
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['background', "overlays", "contrasts", "task_name", 'prefix']), name="inputnode")
     
     reslice_overlay = pe.Node(interface=spm.Coregister(), name="reslice_overlay")
     reslice_overlay.inputs.jobtype="write"
     reslice_overlay.inputs.write_interp = 0
     
-    reslice_ggmm_overlay = reslice_overlay.clone(name="reslice_ggmm_overlay")
+#    reslice_ggmm_overlay = reslice_overlay.clone(name="reslice_ggmm_overlay")
     
     plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay', 'title'])
-    make_titles_fdr = pe.Node(interface=util.Function(input_names=['task','contrasts', 'prefix'], 
+    make_titles = pe.Node(interface=util.Function(input_names=['task','contrasts', 'prefix'], 
                                                  output_names=['titles'], 
-                                                 function=_make_titles), name="make_titles_fdr")
-    make_titles_fdr.inputs.prefix = "Topo FDR "
+                                                 function=_make_titles), name="make_titles")
     
-    plot_ggmm = plot.clone("plot_ggmm")
-    
-    make_titles_ggmm = pe.Node(interface=util.Function(input_names=['task','contrasts', 'prefix'], 
-                                                 output_names=['titles'], 
-                                                 function=_make_titles), name="make_titles_ggmm")
-    make_titles_ggmm.inputs.prefix = "Topo GGMM "
+#    plot_ggmm = plot.clone("plot_ggmm")
+#    
+#    make_titles_ggmm = pe.Node(interface=util.Function(input_names=['task','contrasts', 'prefix'], 
+#                                                 output_names=['titles'], 
+#                                                 function=_make_titles), name="make_titles_ggmm")
+#    make_titles_ggmm.inputs.prefix = "Topo GGMM "
     
     #plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay'])
     
-    visualise_overlay = pe.Workflow(name="visualise"+name)
+    visualise_overlay = pe.Workflow(name="visualise_"+name)
     
     visualise_overlay.connect([
                                (inputnode,reslice_overlay, [("background","target"),
                                                            ("overlays","source")]),
-                               (inputnode,reslice_ggmm_overlay, [("background","target"),
-                                                           ("ggmm_overlays","source")]),
+#                               (inputnode,reslice_ggmm_overlay, [("background","target"),
+#                                                           ("ggmm_overlays","source")]),
                                (reslice_overlay, plot, [("coregistered_source", "overlay")]),
                                (inputnode, plot, [("background", "background")]),
-                               (inputnode, make_titles_fdr, [('task_name', 'task'),
-                                                         ('contrasts', 'contrasts')]),
-                               (make_titles_fdr, plot, [('titles', 'title')]),
+                               (inputnode, make_titles, [('task_name', 'task'),
+                                                         ('contrasts', 'contrasts'),
+                                                         ('prefix', 'prefix')]),
+                               (make_titles, plot, [('titles', 'title')]),
                              
-                               (reslice_ggmm_overlay, plot_ggmm, [("coregistered_source", "overlay")]),
-                               (inputnode, plot_ggmm, [("background", "background")]),
-                               (inputnode, make_titles_ggmm, [('task_name', 'task'),
-                                                         ('contrasts', 'contrasts')]),
-                               (make_titles_ggmm, plot_ggmm, [('titles', 'title')]),
+#                               (reslice_ggmm_overlay, plot_ggmm, [("coregistered_source", "overlay")]),
+#                               (inputnode, plot_ggmm, [("background", "background")]),
+#                               (inputnode, make_titles_ggmm, [('task_name', 'task'),
+#                                                         ('contrasts', 'contrasts')]),
+#                               (make_titles_ggmm, plot_ggmm, [('titles', 'title')]),
+                               ])
+    return visualise_overlay
+
+def create_visualise_overlay(name, masked=False):#, contrasts):
+    visualise_overlay = pe.Workflow(name=name)
+    
+    fields=['background', "overlays", "contrasts", "task_name", "prefix"]
+    if masked:
+        fields.append("mask")
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=fields), name="inputnode")
+    inputnode.inputs.prefix = ''
+    
+    plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay', 'title'])
+    
+    if masked:
+            reslice_mask = pe.Node(interface=spm.Coregister(), name="reslice_mask")
+            reslice_mask.inputs.jobtype="write"
+            reslice_mask.inputs.write_interp = 0
+            visualise_overlay.connect([
+                           (inputnode,reslice_mask, [("background","target"),
+                                                       ("mask","source")]),
+                           (reslice_mask, plot, [("coregistered_source", "mask")]),
+                           ])
+    
+    reslice_overlay = pe.Node(interface=spm.Coregister(), name="reslice_overlay")
+    reslice_overlay.inputs.jobtype="write"
+    reslice_overlay.inputs.write_interp = 0
+    
+    make_titles = pe.Node(interface=util.Function(input_names=['task','contrasts', 'prefix'], 
+                                                 output_names=['titles'], 
+                                                 function=_make_titles), name="make_titles")
+    
+    visualise_overlay.connect([
+                               (inputnode,reslice_overlay, [("background","target"),
+                                                           ("overlays","source")]),
+                               (reslice_overlay, plot, [("coregistered_source", "overlay")]),
+                               (inputnode, plot, [("background", "background")]),
+                               (inputnode, make_titles, [('task_name', 'task'),
+                                                         ('contrasts', 'contrasts'),
+                                                         ('prefix', 'prefix')]),
+                               (make_titles, plot, [('titles', 'title')]),
                                ])
     return visualise_overlay
 
 def create_report_pipeline(pipeline_name="report"):#, contrasts):
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['struct', "raw_stat_images", "thresholded_stat_images", "ggmm_thresholded_stat_images", "mask", "plot_realign", 'contrasts', 'task_name']), name="inputnode")
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['struct', "raw_stat_images", "thresholded_stat_images", "mask", "realignment_parameters", 'outlier_files', 'contrasts', 'task_name']), name="inputnode")
     
-    raw_stat_visualise = create_visualise_masked_overlay(pipeline_name=pipeline_name, name="raw_stat")
-    thresholded_stat_visualise = create_visualise_thresholded_overlay(pipeline_name=pipeline_name, name="thresholded_stat")
+    visualise_unthresholded_stat = create_visualise_overlay(name="visualise_unthresholded_stat", masked=True)
+    visualise_thresholded_stat = create_visualise_overlay(name="visualise_thresholded_stat", masked=False)
+    plot_realign = pe.Node(interface=neuroutils.PlotRealignemntParameters(), name="plot_realign")
     
-    psmerge_raw = pe.Node(interface = neuroutils.PsMerge(), name = "psmerge_raw")
-    psmerge_raw.inputs.out_file = "merged.pdf"
-    psmerge_th = psmerge_raw.clone(name="psmerge_th")
-    psmerge_ggmm_th = psmerge_raw.clone(name="psmerge_ggmm_th")
-    psmerge_all = psmerge_raw.clone(name="psmerge_all")
-    mergeinputs = pe.Node(interface=Merge(4), name="mergeinputs")
+    psmerge_all = pe.Node(interface = neuroutils.PsMerge(), name = "psmerge_all")
+    psmerge_all.inputs.out_file = "merged.pdf"
+    mergeinputs = pe.Node(interface=Merge(5), name="mergeinputs")
     
     report = pe.Workflow(name="report")
     
     report.connect([
-                    (inputnode, raw_stat_visualise, [("struct", "inputnode.background"),
+                    (inputnode, visualise_unthresholded_stat, [("struct", "inputnode.background"),
                                                      ("raw_stat_images", "inputnode.overlays"),
                                                      ("mask", "inputnode.mask"),
                                                      ('contrasts', 'inputnode.contrasts'),
                                                      ('task_name', 'inputnode.task_name')]),
-                    (inputnode, thresholded_stat_visualise, [("struct", "inputnode.background"),
+                    (inputnode, visualise_thresholded_stat, [("struct", "inputnode.background"),
                                                              ("thresholded_stat_images", "inputnode.overlays"),
-                                                             ("ggmm_thresholded_stat_images", "inputnode.ggmm_overlays"),
+                                                             #("ggmm_thresholded_stat_images", "inputnode.ggmm_overlays"),
                                                              ('contrasts', 'inputnode.contrasts'),
                                                              ('task_name', 'inputnode.task_name')]),
+                    
+                    (inputnode, plot_realign, [('realignment_parameters', 'realignment_parameters'),
+                                               ('outlier_files', 'outlier_files')]),
                                                              
-                    (raw_stat_visualise, psmerge_raw, [("plot.plot", "in_files")]),
-                    (thresholded_stat_visualise, psmerge_th, [("plot.plot", "in_files")]),
-                    (thresholded_stat_visualise, psmerge_ggmm_th, [("plot_ggmm.plot", "in_files")]),
-                    (inputnode, mergeinputs, [("plot_realign", "in1")]),                                
-                    (psmerge_raw, mergeinputs, [("merged_file", "in2")]),
-                    (psmerge_th, mergeinputs, [("merged_file", "in3")]),
-                    (psmerge_ggmm_th, mergeinputs, [("merged_file", "in4")]),
+                    (visualise_unthresholded_stat, mergeinputs, [("plot.plot", "in2")]),
+                    (visualise_thresholded_stat, mergeinputs, [("plot.plot", "in3")]),
+                    #(inputnode, mergeinputs, [('ggmm_hist', 'in4')]),
+#                    (thresholded_stat_visualise, mergeinputs, [("plot_ggmm.plot", "in5")]),
+                    (plot_realign, mergeinputs, [("plot", "in1")]),                                
                     (mergeinputs, psmerge_all, [("out", "in_files")]),                                
                     ])
     return report
@@ -414,29 +495,34 @@ def create_pipeline_functional_run(name="functional_run", series_format="3d"):#,
                           (merge, preproc_func, [("merged_file", "inputnode.func")])])
     else:
         pipeline.connect([(inputnode, preproc_func, [("func", "inputnode.func")])])
+        
     pipeline.connect([
                       (inputnode, preproc_func, [("struct","inputnode.struct"),
                                                  ('TR', "inputnode.TR"),
                                                  ('sparse', "inputnode.sparse")]),
-#                      (preproc_func, model_pipeline, [('realign.realignment_parameters','inputnode.realignment_parameters'),
-#                                                      ('smooth.smoothed_files','inputnode.functional_runs'),
-#                                                      ('art.outlier_files','inputnode.outlier_files'),
-#                                                      ('compute_mask.brain_mask','inputnode.mask')]),
-#                      (inputnode, model_pipeline, [('contrasts', 'inputnode.contrasts'),
-#                                                   ('conditions', 'inputnode.conditions'),
-#                                                   ('onsets', 'inputnode.onsets'),
-#                                                   ('durations', 'inputnode.durations'),
-#                                                   ('TR', 'inputnode.TR'),
-#                                                   ('units', 'inputnode.units'),
-#                                                   ('sparse', "inputnode.sparse")]),
-#                      (inputnode, report, [("struct", "inputnode.struct"),
-#                                            ("contrasts", "inputnode.contrasts"),
-#                                           ('task_name', 'inputnode.task_name')]),
-#                      (model_pipeline, report, [("contrastestimate.spmT_images","inputnode.raw_stat_images"),
-#                                                ("level1estimate.mask_image", "inputnode.mask"),
-#                                                ("threshold.thresholded_map", "inputnode.thresholded_stat_images"),
-#                                                ("threshold_topo_ggmm.topo_fdr.thresholded_map", "inputnode.ggmm_thresholded_stat_images")]),
-#                      (preproc_func, report,[("plot_realign.plot","inputnode.plot_realign")]),
+                      (preproc_func, model_pipeline, [('outputnode.realignment_parameters','inputnode.realignment_parameters'),
+                                                      ('outputnode.preproced_files','inputnode.functional_runs'),
+                                                      ('outputnode.outlier_files','inputnode.outlier_files'),
+                                                      ('outputnode.mask_file','inputnode.mask')]),
+                      (inputnode, model_pipeline, [('contrasts', 'inputnode.contrasts'),
+                                                   ('conditions', 'inputnode.conditions'),
+                                                   ('onsets', 'inputnode.onsets'),
+                                                   ('durations', 'inputnode.durations'),
+                                                   ('TR', 'inputnode.TR'),
+                                                   ('units', 'inputnode.units'),
+                                                   ('sparse', "inputnode.sparse")]),
+                      (inputnode, report, [("struct", "inputnode.struct"),
+                                            ("contrasts", "inputnode.contrasts"),
+                                           ('task_name', 'inputnode.task_name')]),
+                      (model_pipeline, report, [("rename_t_maps.out_file","inputnode.raw_stat_images"),
+                                                ("level1estimate.mask_image", "inputnode.mask"),
+                                                ("threshold.thresholded_map", "inputnode.thresholded_stat_images"),
+#                                                ("threshold_topo_ggmm.topo_fdr.thresholded_map", "inputnode.ggmm_thresholded_stat_images"),
+#                                                ("threshold_topo_ggmm.ggmm.histogram", "inputnode.ggmm_hist")
+                                                ]),
+                      
+                      (preproc_func, report,[("outputnode.realignment_parameters","inputnode.realignment_parameters"),
+                                             ('art.outlier_files', 'inputnode.outlier_files')]),
 #                      
                       ])
     return pipeline

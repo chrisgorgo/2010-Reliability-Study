@@ -4,6 +4,7 @@
 	<comment></comment>
 	<projects>
 		<project>neuroutils</project>
+		<project>nibabel</project>
 		<project>nipype</project>
 	</projects>
 	<buildSpec>
