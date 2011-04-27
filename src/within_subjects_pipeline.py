@@ -10,7 +10,7 @@ import nipype.algorithms.misc as misc
 import neuroutils
 from StringIO import StringIO
 from nipype.interfaces.io import DataSink, SQLiteSink
-from variables import results_dir,working_dir, dbfile, subjects, tasks, thr_methods, getStatLabels
+from variables import results_dir,working_dir, dbfile, subjects, tasks, thr_methods, getStatLabels, roi
 
 subjects_infosource = pe.Node(interface=util.IdentityInterface(fields=['subject_id']),
                               name="subjects_infosource")
@@ -24,15 +24,19 @@ thr_method_infosource = pe.Node(interface=util.IdentityInterface(fields=['thr_me
                               name="thr_method_infosource")
 thr_method_infosource.iterables = ('thr_method', thr_methods)
 
-compare_datagrabber = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'task_name', 'thr_method'],
+roi_infosource = pe.Node(interface=util.IdentityInterface(fields=['roi']),
+                              name="roi_infosource")
+roi_infosource.iterables = ('roi', roi)
+
+compare_datagrabber = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'task_name', 'thr_method', 'roi'],
                                                outfields=['first_map', 'second_map', 'T1']),
                      name = 'compare_datagrabber')
 
 compare_datagrabber.inputs.base_directory = os.path.join(results_dir, "volumes")
-compare_datagrabber.inputs.template = 't_maps/thresholded/_subject_id_%s/_session_%s/_task_name_%s/_thr_method_%s/*.img'
+compare_datagrabber.inputs.template = 't_maps/thresholded/_subject_id_%s/_session_%s/_task_name_%s/_roi_%s/_thr_method_%s/*.img'
 compare_datagrabber.inputs.field_template = dict(T1= 'T1/_subject_id_%s/*.nii')
-compare_datagrabber.inputs.template_args = dict(first_map = [['subject_id', 'first', 'task_name', 'thr_method']],
-                                                second_map = [['subject_id', 'second', 'task_name', 'thr_method']],
+compare_datagrabber.inputs.template_args = dict(first_map = [['subject_id', 'first', 'task_name', 'roi','thr_method']],
+                                                second_map = [['subject_id', 'second', 'task_name', 'roi','thr_method']],
                                                 T1 = [['subject_id']])
 compare_datagrabber.inputs.sort_filelist = True
 compare_datagrabber.overwrite = True
@@ -46,7 +50,16 @@ make_titles_diff = pe.MapNode(interface=util.Function(input_names=['dice', 'jacc
                                                  output_names=['title'], 
                                                  function=_make_titles), name="make_titles_diff", iterfield=['dice', 'jaccard', 'volume', 'contrast'], overwrite = True)
 
-sqlitesink = pe.MapNode(interface = SQLiteSink(input_names=["subject_id", 'task_name', 'contrast_name', 'dice', 'jaccard', 'volume_difference', 'thr_method']), name="sqlitesink", iterfield=["contrast_name", "dice", 'jaccard', 'volume_difference'])
+sqlitesink = pe.MapNode(interface = SQLiteSink(input_names=["subject_id", 
+                                                            'task_name', 
+                                                            'contrast_name', 
+                                                            'dice', 
+                                                            'jaccard', 
+                                                            'volume_difference', 
+                                                            'thr_method',
+                                                            'roi']), 
+                        name="sqlitesink", 
+                        iterfield=["contrast_name", "dice", 'jaccard', 'volume_difference'])
 sqlitesink.inputs.database_file = dbfile
 sqlitesink.inputs.table_name = "reliability2010_within_subjects"
 
@@ -64,6 +77,7 @@ within_subjects_pipeline = pe.Workflow(name="within_subjects_pipeline")
 within_subjects_pipeline.base_dir = working_dir
 within_subjects_pipeline.connect([(subjects_infosource, compare_datagrabber, [('subject_id', 'subject_id')]),
                           (tasks_infosource, compare_datagrabber, [('task_name', 'task_name')]),
+                          (roi_infosource, compare_datagrabber, [('roi', 'roi')]),
                           (thr_method_infosource, compare_datagrabber, [('thr_method', 'thr_method')]),
                           (compare_datagrabber, compare_thresholded_maps, [('first_map', 'volume1'),
                                                                            ('second_map', 'volume2')]),
@@ -75,6 +89,7 @@ within_subjects_pipeline.connect([(subjects_infosource, compare_datagrabber, [('
                           (tasks_infosource, sqlitesink, [('task_name', 'task_name'),
                                                           (('task_name', getStatLabels), 'contrast_name')]),
                           (thr_method_infosource, sqlitesink, [('thr_method','thr_method')]),
+                          (roi_infosource, sqlitesink, [('roi', 'roi')]),
                           
                           (compare_thresholded_maps, plot_diff, [('diff_file', "overlay")]),
                           (compare_datagrabber, plot_diff, [('T1', 'background')]),

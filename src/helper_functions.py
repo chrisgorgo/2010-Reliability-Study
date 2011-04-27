@@ -14,6 +14,7 @@ from neuroutils.bootstrapping import PermuteTimeSeries
 from nipype.workflows.fsl import create_bedpostx_pipeline, create_eddy_correct_pipeline, create_susan_smooth
 
 import numpy as np
+from nipype.algorithms.misc import PickAtlas
 
 fsl.FSLCommand.set_default_output_type('NIFTI')
 
@@ -164,7 +165,7 @@ def _get_microtime_resolution(volume, sparse):
 
 def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = True, name="model", save_residuals=False):
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['outlier_files', "realignment_parameters", "functional_runs", "mask",
-                                                                 'conditions','onsets','durations','TR','contrasts','units','sparse']), name="inputnode")
+                                                                 'conditions','onsets','durations','TR','contrasts','units','sparse', 'atlas_labels', 'dilation_size']), name="inputnode")
     
     
     modelspec = pe.Node(interface=model.SpecifySPMModel(), name= "modelspec")
@@ -225,6 +226,38 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
             (inputnode, contrast_estimate, [('mask','mask')]),
             ])
     else:
+        
+        pick_mask = pe.Node(PickAtlas(), name="pick_mask")
+        pick_mask.inputs.atlas = "/usr/share/fsl/data/atlases/Talairach/Talairach-labels-1mm.nii"
+        model_pipeline.connect(inputnode, 'atlas_labels', pick_mask, 'labels')
+        model_pipeline.connect(inputnode, 'dilation_size', pick_mask, 'dilation_size')
+        
+        reslice_mask = pe.Node(spm.Coregister(jobtype="write", write_interp=0), name="reslice_mask")
+        
+        contrain_mask = pe.Node(fsl.maths.ApplyMask(), name='constrain_mask')
+        model_pipeline.connect(reslice_mask, 'coregistered_source', contrain_mask, 'in_file')
+        model_pipeline.connect(inputnode, 'mask', contrain_mask, 'mask_file')
+        
+        merge_roi = pe.Node(interface=utility.Merge(2),
+                         name='merge_roi')
+        model_pipeline.connect(inputnode, 'mask', merge_roi, 'in1')
+        model_pipeline.connect(contrain_mask, 'out_file', merge_roi, 'in2')
+        
+        select_roi = pe.Node(interface=utility.Select(), name="select_roi")
+        model_pipeline.connect(merge_roi, 'out', select_roi, 'inlist')
+        
+        roi_inputspec = pe.Node(interface=utility.IdentityInterface(fields=["roi"]), name="roi_inputspec")
+        
+        def chooseindex_roi(roi):
+            return {True:1, False:0}[roi]
+        
+        model_pipeline.connect(roi_inputspec, ("roi", chooseindex_roi), select_roi, 'index')
+        
+        mask = pe.Node(interface=utility.IdentityInterface(fields=["mask"]), name="mask")
+        
+        model_pipeline.connect(select_roi, 'out', mask, 'mask')
+        
+        
         level1design = pe.Node(interface=spm.Level1Design(), name= "level1design")
         level1design.inputs.bases              = {'hrf':{'derivs': [0,0]}}
         if ar1:
@@ -279,9 +312,12 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
         def getLabels(contrasts):
             return [ contrast[0].lower() for contrast in contrasts]
         
-        model_pipeline.connect([(modelspec, level1design,[('session_info','session_info')]),
-                                (inputnode, level1design, [('mask', 'mask_image'),
-                                                           ('TR', 'interscan_interval'),
+        model_pipeline.connect([(pick_mask, reslice_mask, [('mask_file', 'source')]),
+                                (inputnode, reslice_mask, [('mask','target')]),
+                                
+                                (modelspec, level1design,[('session_info','session_info')]),
+                                (mask, level1design, [('mask','mask_image')]),
+                                (inputnode, level1design, [('TR', 'interscan_interval'),
                                                            (("functional_runs", get_ref_slice), "microtime_onset")]),
                                 (inputnode, microtime_resolution, [("functional_runs", "volume"),
                                                                    ("sparse", "sparse")]),
@@ -392,7 +428,8 @@ def create_report_pipeline(pipeline_name="report"):#, contrasts):
 
 def create_pipeline_functional_run(name="functional_run", series_format="3d"):#, conditions, onsets, durations, tr, contrasts, units='scans', n_slices=30, sparse=False, n_skip=4):
     
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct", 'conditions','onsets','durations','TR','contrasts','units','sparse', 'task_name']), name="inputnode")
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct", 'conditions','onsets','durations','TR','contrasts',
+                                                                 'units','sparse', 'task_name', 'atlas_labels', 'dilation_size']), name="inputnode")
     
 #    if sparse:
 #        real_tr = tr/2
@@ -429,7 +466,9 @@ def create_pipeline_functional_run(name="functional_run", series_format="3d"):#,
                                                    ('durations', 'inputnode.durations'),
                                                    ('TR', 'inputnode.TR'),
                                                    ('units', 'inputnode.units'),
-                                                   ('sparse', "inputnode.sparse")]),
+                                                   ('sparse', "inputnode.sparse"),
+                                                   ('atlas_labels', 'inputnode.atlas_labels'),
+                                                   ('dilation_size', 'inputnode.dilation_size')]),
                       (inputnode, report, [("struct", "inputnode.struct"),
                                             ("contrasts", "inputnode.contrasts"),
                                            ('task_name', 'inputnode.task_name')]),

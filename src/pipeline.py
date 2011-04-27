@@ -1,5 +1,5 @@
-#import pydevd
-#pydevd.set_pm_excepthook()
+import pydevd
+pydevd.set_pm_excepthook()
 from nipype.interfaces import utility
 
 
@@ -20,27 +20,6 @@ from StringIO import StringIO
 from nipype.interfaces.io import DataSink, SQLiteSink
 from variables import *
 
-
-data_dir = '/media/data/2010reliability/data'
-results_dir = "/home/filo/workspace/2010reliability/results"
-working_dir = '/media/data/2010reliability/workdir_fmri'
-dbfile = os.path.join(results_dir, "results.db")
-tasks = ["finger_foot_lips"]#, 'overt_verb_generation', "overt_word_repetition", "covert_verb_generation", "line_bisection"]
-thr_methods = ['topo_fdr','topo_ggmm']
-sessions = ['first', 'second']
-
-subjects = ['08143633-aec2-49a9-81cf-45867827b871',
-            '3a3e1a6f-dc92-412c-870a-74e4f4e85ddb',
-            '8bb20980-2dc4-4da9-9065-879e2e7e1fbe',
-            '8d80a62b-aa21-49bd-b8ca-9bc678ffe7b0',
-            '90bafbe8-c67f-4388-b677-27fcf2427c71',
-            '94cfb26f-0060-4c44-b59f-702ca61143ca',
-            'c2cc1c59-df88-4366-9f99-73b722235789',
-            'cf48f394-1912-4202-89f7-dbf8ef9d6e19',
-            'df4808a4-ecce-4d0a-9fe2-535c0720ec17',
-            'e094aae5-8387-4b5c-bf56-df4a88623c5d',
-            ]
-
 #info = dict(T1 = [['subject_id', 'session_id', 'co_COR_3D_IR_PREP']],
 #            func = [['subject_id', 'session_id', 'task_name']],
 #            #dwi = [['subject_id', 'session_id', '[0-9]_DTI_64G_2.0_mm_isotropic']],
@@ -59,6 +38,10 @@ tasks_infosource.iterables = ('task_name', tasks)
 thr_method_infosource = pe.Node(interface=util.IdentityInterface(fields=['thr_method']),
                               name="thr_method_infosource")
 thr_method_infosource.iterables = ('thr_method', thr_methods)
+
+roi_infosource = pe.Node(interface=util.IdentityInterface(fields=['roi']),
+                              name="roi_infosource")
+roi_infosource.iterables = ('roi', roi)
 
 sessions_infosource = pe.Node(interface=util.IdentityInterface(fields=['session']),
                               name="sessions_infosource")
@@ -178,6 +161,25 @@ datasink.inputs.regexp_substitutions = [
                                         #(r'(?P<subject_id>_subject_id[^/]*)([/])', r'\g<subject_id>_')
                                         ]
 
+sqlitesink = pe.MapNode(interface = SQLiteSink(input_names=["subject_id",
+                                                            "session",
+                                                            'task_name', 
+                                                            'contrast_name',
+                                                            'cluster_forming_threshold',
+                                                            'selected_model',
+                                                            'activation_forced',
+                                                            'n_clusters',
+                                                            'pre_topo_n_clusters',
+                                                            'roi']), 
+                        name="sqlitesink", 
+                        iterfield=["contrast_name", 'cluster_forming_threshold',
+                                                            'selected_model',
+                                                            'activation_forced',
+                                                            'n_clusters',
+                                                            'pre_topo_n_clusters'])
+sqlitesink.inputs.database_file = dbfile
+sqlitesink.inputs.table_name = "reliability2010_ggmm_thresholding"
+
 def getReportFilename(subject_id):
     return "subject_%s_report.pdf"%subject_id
 
@@ -213,6 +215,14 @@ def getUnits(task_name):
 def getSparse(task_name):
     from variables import design_parameters
     return design_parameters[task_name]['sparse']
+
+def getAtlasLabels(task_name):
+    from variables import design_parameters
+    return design_parameters[task_name]['atlas_labels']
+
+def getDilation(task_name):
+    from variables import design_parameters
+    return design_parameters[task_name]['dilation']
 
 def pickFirst(l):
     return l[0]
@@ -266,7 +276,8 @@ main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 
                        (tasks_infosource, func_datasource, [('task_name', 'task_name')]),
                        
                        (thr_method_infosource, functional_run, [('thr_method', 'model.thr_method_inputspec.thr_method'),
-                                                                              ('thr_method', 'report.visualise_thresholded_stat.inputnode.prefix')]),
+                                                                ('thr_method', 'report.visualise_thresholded_stat.inputnode.prefix')]),
+                       (roi_infosource, functional_run, [('roi', 'model.roi_inputspec.roi')]),
                        (func_datasource, functional_run, [("func", "inputnode.func")]),
                        (normalize, functional_run, [("normalized_files","inputnode.struct")]),
                        (tasks_infosource, functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
@@ -276,139 +287,26 @@ main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 
                                                                          (('task_name', getContrasts), 'inputnode.contrasts'),
                                                                          (('task_name', getUnits), 'inputnode.units'),
                                                                          (('task_name', getSparse), 'inputnode.sparse'),
+                                                                         (('task_name', getAtlasLabels), 'inputnode.atlas_labels'),
+                                                                         (('task_name', getDilation), 'inputnode.dilation_size'),
                                                                          ('task_name', 'inputnode.task_name')]),
-                                       
-#                       (subjects_infosource, second_session_datasource, [('subject_id', 'subject_id'),
-#                                                                        (('subject_id', getSecondSessionId), 'session_id')]),
-#                       (tasks_infosource, second_session_datasource, [('task_name', 'task_name')]),
-#                       (thr_method_infosource, second_session_functional_run, [('thr_method', 'model.thr_method_inputspec.thr_method'),
-#                                                                               ('thr_method', 'report.visualise_thresholded_stat.inputnode.prefix')]),
-#                       (first_session_datasource, second_session_functional_run, [("T1","inputnode.struct")]),
-#                       (second_session_datasource, second_session_functional_run, [("func","inputnode.func")]),
-#                       (tasks_infosource, second_session_functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
-#                                                                          (('task_name', getOnsets), 'inputnode.onsets'),
-#                                                                          (('task_name', getDurations), 'inputnode.durations'),
-#                                                                          (('task_name', getTR), 'inputnode.TR'),
-#                                                                          (('task_name', getContrasts), 'inputnode.contrasts'),
-#                                                                          (('task_name', getUnits), 'inputnode.units'),
-#                                                                          (('task_name', getSparse), 'inputnode.sparse'),
-#                                                                          ('task_name', 'inputnode.task_name')]),
-#                       
-#                       (first_session_functional_run, compare_thresholded_maps, [('report.visualise_thresholded_stat.reslice_overlay.coregistered_source', 'volume1')]),
-#                       (second_session_functional_run, compare_thresholded_maps, [('report.visualise_thresholded_stat.reslice_overlay.coregistered_source', 'volume2')]),
-#                       (tasks_infosource, compare_thresholded_maps, [(('task_name', getDiffLabels), 'out_file')]),
-#                                                                               
-##                       (first_session_functional_run, compare_topo_fdr_thresholded_maps, [('report.visualisethresholded_stat.reslice_overlay.coregistered_source', 'volume1')]),
-##                       (second_session_functional_run, compare_topo_fdr_thresholded_maps, [('report.visualisethresholded_stat.reslice_overlay.coregistered_source', 'volume2')]),
-##                       (tasks_infosource, compare_topo_fdr_thresholded_maps, [(('task_name', getDiffLabels), 'out_file')]),
-#                       
-#                       (compare_thresholded_maps, plot_diff, [('diff_file', "overlay")]),
-#                       (first_session_datasource, plot_diff, [('T1', 'background')]),
-#                       (compare_thresholded_maps, make_titles_diff, [('dice', 'dice'),
-#                                                                                         ('jaccard', 'jaccard'),
-#                                                                                         ('volume', 'volume')]),
-#                       (tasks_infosource, make_titles_diff, [(('task_name', getStatLabels), 'contrast')]),
-#                       (subjects_infosource, make_titles_diff, [('subject_id', 'subject_id')]),
-#                       (thr_method_infosource, make_titles_diff, [('thr_method', 'prefix')]),
-#                       (make_titles_diff, plot_diff, [('title', 'title')]),
-#                       
-##                       (compare_topo_fdr_thresholded_maps, plot_topo_fdr_diff, [('diff_file', "overlay")]),
-##                       (first_session_datasource, plot_topo_fdr_diff, [('T1', 'background')]),
-##                       (compare_topo_fdr_thresholded_maps, make_titles_topo_fdr_diff, [('dice', 'dice'),
-##                                                                                         ('jaccard', 'jaccard'),
-##                                                                                         ('volume', 'volume')]),
-##                       (tasks_infosource, make_titles_topo_fdr_diff, [(('task_name', getStatLabels), 'contrast')]),
-##                       (subjects_infosource, make_titles_topo_fdr_diff, [('subject_id', 'subject_id')]),
-##                       (make_titles_topo_fdr_diff, plot_topo_fdr_diff, [('title', 'title')]),
-#                       
-#                       (compare_thresholded_maps, sqlitesink, [('dice', "dice",),
-#                                                                         ('jaccard', 'jaccard'),
-#                                                                         ('volume', 'volume_difference')]),
-#                       (subjects_infosource, sqlitesink, [('subject_id', 'subject_id')]),
-#                       (tasks_infosource, sqlitesink, [('task_name', 'task_name'),
-#                                                       (('task_name', getStatLabels), 'contrast_name')]),
-#                       (thr_method_infosource, sqlitesink, [('thr_method','thr_method')]),
-#                       
-##                       (compare_topo_fdr_thresholded_maps, sqlitesink_topo_fdr, [('dice', "dice",),
-##                                                                         ('jaccard', 'jaccard'),
-##                                                                         ('volume', 'volume_difference')]),
-##                       (subjects_infosource, sqlitesink_topo_fdr, [('subject_id', 'subject_id')]),
-##                       (tasks_infosource, sqlitesink_topo_fdr, [('task_name', 'task_name'),
-##                                                       (('task_name', getStatLabels), 'contrast_name')]),
-#                       
-#                       
-#                       (compare_thresholded_maps, datasink, [('diff_file', "volumes.difference_maps.topo_ggmm")]),
-##                       (compare_topo_fdr_thresholded_maps, datasink, [('diff_file', "volumes.difference_maps.topo_fdr")]),
-#                       
-#                       (plot_diff, datasink, [('plot', 'reports.difference_maps.topo_ggmm')]),
-##                       (plot_topo_fdr_diff, datasink, [('plot', 'reports.difference_maps.topo_fdr')]),
-#
+
                        (functional_run, datasink, [('report.visualise_thresholded_stat.reslice_overlay.coregistered_source', 'volumes.t_maps.thresholded')]),
                        (functional_run, datasink, [('report.visualise_unthresholded_stat.reslice_overlay.coregistered_source', 'volumes.t_maps.unthresholded')]),
                        (normalize, datasink, [("normalized_files","volumes.T1")]),
                        (functional_run, datasink, [('report.psmerge_all.merged_file', 'reports')]),
                        
-                       
-#                       (tasks_infosource, functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
-#                                                          (('task_name', getOnsets), 'inputnode.onsets'),
-#                                                          (('task_name', getDurations), 'inputnode.durations'),
-#                                                          (('task_name', getTR), 'inputnode.TR'),
-#                                                          (('task_name', getContrasts), 'inputnode.contrasts'),
-#                                                          (('task_name', getUnits), 'inputnode.units'),
-#                                                          (('task_name', getSparse), 'inputnode.sparse'),
-#                                                          ('task_name', 'inputnode.task_name')]),
-#                                                          
-#                        (datasource, proc_dwi, [("dwi", "inputnode.dwi"),
-#                                               ("dwi_bval", "inputnode.bvals"),
-#                                               ("dwi_bvec", "inputnode.bvecs")]),
-#                       (proc_dwi, seed, [("bedpostx.outputnode.thsamples", "inputnode.thsamples"),
-#                                                          ("bedpostx.outputnode.phsamples", "inputnode.phsamples"),
-#                                                          ("bedpostx.outputnode.fsamples", "inputnode.fsamples")]),
-#                       (functional_run, seed, [("preproc_func.coregister.coregistered_source","inputnode.epi"),
-#                                               ("preproc_func.compute_mask.brain_mask", "inputnode.mask"),
-#                                               ("model.contrastestimate.spmT_images","inputnode.stat"),
-#                                                                  ]),
-#                       (datasource, seed, [("dwi", "inputnode.dwi"),
-#                                           ("T1", "inputnode.T1")]),
-#                       (tasks_infosource, seed, [(('task_name', getStatLabels), 'inputnode.stat_labels')]),
-##                       
-#                       (finger_foot_lips, mergeinputs, [("preproc_func.plot_realign.plot", "in1")]),                                
-#                       (finger_foot_lips, mergeinputs, [("report.psmerge_raw.merged_file", "in2")]),
-#                       (finger_foot_lips, mergeinputs, [("report.psmerge_th.merged_file", "in3")]),
-#                       (finger_foot_lips, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in4")]),
-#                       
-#                       (datasource, overt_verb_generation, [("verb_generation", "inputnode.func"),
-#                                                            ("T1","inputnode.struct")]),
-#                       (overt_verb_generation, mergeinputs, [("preproc_func.plot_realign.plot", "in5")]),
-#                       (overt_verb_generation, mergeinputs, [("report.psmerge_raw.merged_file", "in6")]),
-#                       (overt_verb_generation, mergeinputs, [("report.psmerge_th.merged_file", "in7")]),
-#                       (overt_verb_generation, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in8")]),
-#                       
-#                       (datasource, silent_verb_generation, [("silent_verb_generation", "inputnode.func"),
-#                                                            ("T1","inputnode.struct")]),
-#                       (silent_verb_generation, mergeinputs, [("preproc_func.plot_realign.plot", "in9")]),
-#                       (silent_verb_generation, mergeinputs, [("report.psmerge_raw.merged_file", "in10")]),
-#                       (silent_verb_generation, mergeinputs, [("report.psmerge_th.merged_file", "in11")]),
-#                       (silent_verb_generation, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in12")]),
-#                       
-#                       (datasource, overt_word_repetition, [("word_repetition", "inputnode.func"),
-#                                                            ("T1","inputnode.struct")]),
-#                       (overt_word_repetition, mergeinputs, [("preproc_func.plot_realign.plot", "in13")]),
-#                       (overt_word_repetition, mergeinputs, [("report.psmerge_raw.merged_file", "in14")]),
-#                       (overt_word_repetition, mergeinputs, [("report.psmerge_th.merged_file", "in15")]),
-#                       (overt_word_repetition, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in16")]),
-#                       
-#                       (datasource, line_bisection, [("line_bisection", "inputnode.func"),
-#                                                     ("T1","inputnode.struct")]),
-#                       (line_bisection, mergeinputs, [("preproc_func.plot_realign.plot", "in17")]),
-#                       (line_bisection, mergeinputs, [("report.psmerge_raw.merged_file", "in18")]),
-#                       (line_bisection, mergeinputs, [("report.psmerge_th.merged_file", "in19")]),
-#                       (line_bisection, mergeinputs, [("report.psmerge_ggmm_th.merged_file", "in20")]),
-#                       
-
-#                       
-#                       (mergeinputs, psmerge, [("out", "in_files")]),
-#                       (subjects_infosource, psmerge, [(("subject_id", getReportFilename), "out_file")])
+                       (subjects_infosource, sqlitesink, [('subject_id', 'subject_id')]),
+                       (sessions_infosource, sqlitesink, [('session', 'session')]),
+                       (tasks_infosource, sqlitesink, [('task_name', 'task_name'),
+                                                       (('task_name', getStatLabels), 'contrast_name')]),
+                       (roi_infosource, sqlitesink, [('roi', 'roi')]),
+                       (functional_run, sqlitesink, [('model.threshold_topo_ggmm.ggmm.threshold','cluster_forming_threshold'),
+                                                     ('model.threshold_topo_ggmm.ggmm.selected_model', 'selected_model'),
+                                                     ('model.threshold_topo_ggmm.topo_fdr.activation_forced','activation_forced'),
+                                                     ('model.threshold_topo_ggmm.topo_fdr.n_clusters','n_clusters'),
+                                                     ('model.threshold_topo_ggmm.topo_fdr.pre_topo_n_clusters', 'pre_topo_n_clusters')])
+                
                        ])
 #compare_datagrabber = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'task_name', 'thr_method'],
 #                                               outfields=['first_map', 'second_map', 'T1']),
@@ -539,4 +437,4 @@ main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 
 
 if __name__ == '__main__':
     main_pipeline.run(plugin_args={'n_procs': 4})
-    #main_pipeline.write_graph()
+    main_pipeline.write_graph()
