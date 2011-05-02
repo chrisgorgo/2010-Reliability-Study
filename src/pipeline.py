@@ -1,4 +1,5 @@
 import pydevd
+from parse_line_bisection_log import parse_line_bisection_log
 pydevd.set_pm_excepthook()
 from nipype.interfaces import utility
 
@@ -56,13 +57,14 @@ struct_datasource.inputs.template_args = dict(T1 = [['subject_id', 'co_COR_3D_IR
 struct_datasource.inputs.sort_filelist = True
 
 func_datasource = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'task_name', 'session_id'],
-                                               outfields=['func']),
+                                               outfields=['func', 'line_bisection_log']),
                      name = 'func_datasource')
 
 func_datasource.inputs.base_directory = data_dir
 func_datasource.inputs.template = '%s/%s/*[0-9]_%s*.nii'
-func_datasource.inputs.template_args = dict(func = [['subject_id', 'session_id', 'task_name']])
-#func_datasource.inputs.field_template = dict(T1= '%s/%s/%s/co*.img')
+func_datasource.inputs.template_args = dict(func = [['subject_id', 'session_id', 'task_name']],
+                                            line_bisection_log = [['08143633-aec2-49a9-81cf-45867827b871', '17107']])
+func_datasource.inputs.field_template = dict(line_bisection_log= '%s/%s/logs/*Line_Bisection.log')
 #                                                      #dwi_bval=func_datasource.inputs.template.replace("nii", "bval"),
 #                                        #dwi_bvec=func_datasource.inputs.template.replace("nii", "bvec"),
 #                                        func = '%s_*/*/*[0-9]_%s.nii'
@@ -187,9 +189,15 @@ def getConditions(task_name):
     from variables import design_parameters
     return design_parameters[task_name]['conditions']
     
-def getOnsets(task_name):
-    from variables import design_parameters
-    return design_parameters[task_name]['onsets']
+def getOnsets(task_name, line_bisection_log, delay):
+    if task_name == "line_bisection":
+        from parse_line_bisection_log import parse_line_bisection_log
+        _,_,correct_pictures, incorrect_pictures, noresponse_pictures = parse_line_bisection_log(line_bisection_log, delay)
+        return [correct_pictures["task"], incorrect_pictures["task"], noresponse_pictures["task"],
+                correct_pictures["rest"], incorrect_pictures["rest"], noresponse_pictures["rest"]]
+    else:
+        from variables import design_parameters
+        return design_parameters[task_name]['onsets']
 
     
 def getDurations(task_name):
@@ -257,6 +265,12 @@ get_session_id = pe.Node(interface=utility.Function(input_names=['session', 'sub
                                                     function=getSessionId), 
                          name="get_session_id")
 
+get_onsets = pe.Node(interface=utility.Function(input_names=['task_name', 'line_bisection_log', 'delay'], 
+                                                    output_names=['onsets'], 
+                                                    function=getOnsets), 
+                         name="get_onsets")
+get_onsets.inputs.delay = 4*2.5
+
 main_pipeline = pe.Workflow(name="pipeline")
 main_pipeline.base_dir = working_dir
 main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 'subject_id')]),
@@ -281,7 +295,7 @@ main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 
                        (func_datasource, functional_run, [("func", "inputnode.func")]),
                        (normalize, functional_run, [("normalized_files","inputnode.struct")]),
                        (tasks_infosource, functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
-                                                                         (('task_name', getOnsets), 'inputnode.onsets'),
+#                                                                         (('task_name', getOnsets), 'inputnode.onsets'),
                                                                          (('task_name', getDurations), 'inputnode.durations'),
                                                                          (('task_name', getTR), 'inputnode.TR'),
                                                                          (('task_name', getContrasts), 'inputnode.contrasts'),
@@ -290,6 +304,9 @@ main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 
                                                                          (('task_name', getAtlasLabels), 'inputnode.atlas_labels'),
                                                                          (('task_name', getDilation), 'inputnode.dilation_size'),
                                                                          ('task_name', 'inputnode.task_name')]),
+                       (tasks_infosource, get_onsets, [('task_name', 'task_name')]),
+                       (func_datasource, get_onsets, [('line_bisection_log', 'line_bisection_log')]),
+                       (get_onsets, functional_run, [('onsets', 'inputnode.onsets')]),
 
                        (functional_run, datasink, [('report.visualise_thresholded_stat.reslice_overlay.coregistered_source', 'volumes.t_maps.thresholded')]),
                        (functional_run, datasink, [('report.visualise_unthresholded_stat.reslice_overlay.coregistered_source', 'volumes.t_maps.unthresholded')]),

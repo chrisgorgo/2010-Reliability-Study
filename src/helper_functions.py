@@ -228,7 +228,8 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
     else:
         
         pick_mask = pe.Node(PickAtlas(), name="pick_mask")
-        pick_mask.inputs.atlas = "/usr/share/fsl/data/atlases/Talairach/Talairach-labels-1mm.nii"
+        pick_mask.inputs.atlas = "/usr/share/data/talairach-daemon-atlas/Talairach/Talairach-labels-1mm.nii.gz"
+        pick_mask.inputs.output_file = "roi_mask.nii"
         model_pipeline.connect(inputnode, 'atlas_labels', pick_mask, 'labels')
         model_pipeline.connect(inputnode, 'dilation_size', pick_mask, 'dilation_size')
         

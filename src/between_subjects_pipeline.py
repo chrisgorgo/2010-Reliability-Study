@@ -9,7 +9,7 @@ import nipype.algorithms.misc as misc
 
 import neuroutils
 from nipype.interfaces.io import DataSink, SQLiteSink
-from variables import results_dir,working_dir, dbfile, subjects, tasks, thr_methods, sessions, getStatLabels, config
+from variables import results_dir,working_dir, dbfile, subjects, tasks, thr_methods, sessions, getStatLabels, config, roi
 
 tasks_infosource = pe.Node(interface=util.IdentityInterface(fields=['task_name']),
                            name="tasks_infosource")
