@@ -1,6 +1,6 @@
-import pydevd
+#import pydevd
 from parse_line_bisection_log import parse_line_bisection_log
-pydevd.set_pm_excepthook()
+#pydevd.set_pm_excepthook()
 from nipype.interfaces import utility
 
 
@@ -63,13 +63,23 @@ func_datasource = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'tas
 func_datasource.inputs.base_directory = data_dir
 func_datasource.inputs.template = '%s/%s/*[0-9]_%s*.nii'
 func_datasource.inputs.template_args = dict(func = [['subject_id', 'session_id', 'task_name']],
-                                            line_bisection_log = [['08143633-aec2-49a9-81cf-45867827b871', '17107']])
-func_datasource.inputs.field_template = dict(line_bisection_log= '%s/%s/logs/*Line_Bisection.log')
-#                                                      #dwi_bval=func_datasource.inputs.template.replace("nii", "bval"),
-#                                        #dwi_bvec=func_datasource.inputs.template.replace("nii", "bvec"),
-#                                        func = '%s_*/*/*[0-9]_%s.nii'
-#                                        )
+                                            line_bisection_log = [['subject_id', 'session_id', 'session_id']])
+func_datasource.inputs.field_template = dict(line_bisection_log= '%s/%s/logs/*%s-Line_Bisection.log')
 func_datasource.inputs.sort_filelist = True
+
+dwi_datasource = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'session_id'],
+                                               outfields=['dwi', 'dwi_bval', 'dwi_bvec']),
+                     name = 'dwi_datasource')
+
+dwi_datasource.inputs.base_directory = data_dir
+dwi_datasource.inputs.template = '%s/%s/*%s*.nii'
+dwi_datasource.inputs.template_args = dict(dwi = [['subject_id', 'session_id', '[0-9]_DTI_64G_2.0_mm_isotropic']],
+                                            dwi_bval = [['subject_id', 'session_id', '[0-9]_DTI_64G_2.0_mm_isotropic']],
+                                            dwi_bvec = [['subject_id', 'session_id', '[0-9]_DTI_64G_2.0_mm_isotropic']])
+dwi_datasource.inputs.field_template = dict( dwi_bval=dwi_datasource.inputs.template.replace("nii", "bval"),
+                                             dwi_bvec=dwi_datasource.inputs.template.replace("nii", "bvec"),
+                                        )
+dwi_datasource.inputs.sort_filelist = True
 
 #second_session_datasource = func_datasource.clone(name = 'second_session_datasource')
 
@@ -84,6 +94,12 @@ normalize = pe.Node(interface=spm.Normalize(jobtype="write"), name="normalize")
 
 
 functional_run = create_pipeline_functional_run(name="functional_run", series_format="4d")
+
+tractography_seed = create_prepare_seeds_from_fmri_pipeline("tractography_seed")
+
+proc_dwi = create_dwi_pipeline()
+
+
 #second_session_functional_run = first_session_functional_run.clone("second_session_functional_run")
 
 
@@ -307,6 +323,25 @@ main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 
                        (tasks_infosource, get_onsets, [('task_name', 'task_name')]),
                        (func_datasource, get_onsets, [('line_bisection_log', 'line_bisection_log')]),
                        (get_onsets, functional_run, [('onsets', 'inputnode.onsets')]),
+                       
+                       (subjects_infosource, dwi_datasource, [('subject_id', 'subject_id')]),
+                       (get_session_id, dwi_datasource, [('session_id', 'session_id')]),
+                       
+                       (dwi_datasource, proc_dwi, [("dwi", "inputnode.dwi"),
+                                               ("dwi_bval", "inputnode.bvals"),
+                                               ("dwi_bvec", "inputnode.bvecs")]),
+                       (proc_dwi, tractography_seed, [("bedpostx.outputnode.thsamples", "inputnode.thsamples"),
+                                                          ("bedpostx.outputnode.phsamples", "inputnode.phsamples"),
+                                                          ("bedpostx.outputnode.fsamples", "inputnode.fsamples"),
+                                                          ("dtifit.FA", "inputnode.FA")]),
+                       
+                       (functional_run, tractography_seed, [("preproc_func.coregister.coregistered_source","inputnode.epi"),
+                                                                  ("preproc_func.compute_mask.brain_mask", "inputnode.mask"),
+                                                                  ("model.contrastestimate.spmT_images","inputnode.stat"),
+                                                                  ]),
+                       (tasks_infosource, tractography_seed, [(('task_name', getStatLabels), "inputnode.stat_labels")]),
+                       (dwi_datasource, tractography_seed, [("dwi", "inputnode.dwi")]),
+                       #(normalize, tractography_seed, [("normalized_files","inputnode.T1")]),                                     
 
                        (functional_run, datasink, [('report.visualise_thresholded_stat.reslice_overlay.coregistered_source', 'volumes.t_maps.thresholded')]),
                        (functional_run, datasink, [('report.visualise_unthresholded_stat.reslice_overlay.coregistered_source', 'volumes.t_maps.unthresholded')]),

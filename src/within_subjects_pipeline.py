@@ -105,4 +105,4 @@ within_subjects_pipeline.connect([(subjects_infosource, compare_datagrabber, [('
 
 if __name__ == '__main__':
     within_subjects_pipeline.run(plugin_args={'n_procs': 4})
-    #within_subjects_pipeline.write_graph()
+    within_subjects_pipeline.write_graph()

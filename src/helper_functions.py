@@ -54,6 +54,11 @@ def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sp
 #        real_tr = tr
     
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct", "TR", "sparse"]), name="inputnode")
+    
+    pre_ica = pe.Node(interface=fsl.MELODIC(), name="pre_ica")
+    pre_ica.inputs.no_mask = True
+    pre_ica.inputs.out_all = True
+    pre_ica.inputs.report = True
 
     skip = pe.Node(interface=fsl.ExtractROI(), name="skip")
     skip.inputs.t_min = 4 #TODO
@@ -94,9 +99,15 @@ def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sp
     
     compute_mask = pe.Node(interface=ComputeMask(), name="compute_mask")
     
+    post_ica = pe.Node(interface=fsl.MELODIC(), name="post_ica")
+    post_ica.inputs.out_all = True
+    post_ica.inputs.report = True
+    
     preproc_func = pe.Workflow(name="preproc_func")
     preproc_func.connect([
                           (inputnode,skip, [("func", "in_file")]),
+                          (inputnode, pre_ica, [("func", "in_files"),
+                                                ("TR", "tr_sec")]),
                           
                           (coregister, compute_mask, [('coregistered_source','mean_volume')]),
                           (skip, slice_timing, [("roi_file", "in_files"),
@@ -121,6 +132,10 @@ def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sp
                           
                           (coregister, susan_smooth, [("coregistered_files","inputnode.in_files")]),
                           (compute_mask, susan_smooth,[('brain_mask','inputnode.mask_file')]),
+                          
+                          (susan_smooth, post_ica, [("outputnode.smoothed_files", "in_files")]),
+                          (inputnode, post_ica, [("TR", "tr_sec")]),
+                          (compute_mask,post_ica,[('brain_mask','mask')]),
                           
 #                          (coregister, smooth, [("coregistered_files","in_files")]),
                           
@@ -586,7 +601,7 @@ def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
                                                                  "phsamples",
                                                                  "thsamples",
                                                                  "fsamples",
-                                                                 "T1",
+                                                                 "FA",
                                                                  "stat_labels"]), 
                                                                  name="inputnode")
     
@@ -612,33 +627,47 @@ def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
     probtractx.inputs.c_thresh = 0.2
     probtractx.inputs.n_steps = 2000
     probtractx.inputs.step_length = 0.5
-    probtractx.inputs.n_samples = 100
+    probtractx.inputs.n_samples = 10
     probtractx.inputs.correct_path_distribution = True
     probtractx.inputs.verbose = 2
     
-    segment = pe.Node(interface=spm.Segment(), name="segment")
-    segment.inputs.gm_output_type = [False, False, True]
-    segment.inputs.wm_output_type = [False, False, True]
-    segment.inputs.csf_output_type = [False, False, False]
+#    segment = pe.Node(interface=spm.Segment(), name="segment")
+#    segment.inputs.gm_output_type = [False, False, True]
+#    segment.inputs.wm_output_type = [False, False, True]
+#    segment.inputs.csf_output_type = [False, False, False]
+#    
+#    th_wm = pe.Node(interface=fsl.Threshold(), name="th_wm")
+#    th_wm.inputs.direction = "below"
+#    th_wm.inputs.thresh = 0.2
+#    th_gm = th_wm.clone("th_gm")
+#    
+#    wm_gm_interface = pe.Node(fsl.ApplyMask(), name="wm_gm_interface")
+#    
+#    bet_t1 = pe.Node(fsl.BET(), name="bet_t1")
+#    
+#    coregister_t1_to_dwi = pe.Node(interface=fsl.FLIRT(), name="coregister_t1_to_dwi")
+#    
+#    invert_dwi_to_t1_xfm = pe.Node(interface=fsl.ConvertXFM(), name="invert_dwi_to_t1_xfm")
+#    invert_dwi_to_t1_xfm.inputs.invert_xfm = True
+#    
+#    reslice_gm = pe.Node(interface=fsl.FLIRT(), name="reslice_gm")
+#    reslice_gm.inputs.apply_xfm = True
+#    
+#    reslice_wm = reslice_gm.clone("reslice_wm")
+
+    pipeline = pe.Workflow(name=name)
+    erode_mask = pe.Node(interface = fsl.maths.ErodeImage(), name = "erode_mask")
+    erode_mask.inputs.kernel_shape = "sphere"
+    erode_mask.inputs.kernel_size = 2
+    pipeline.connect(reslice_mask, "out_file", erode_mask, "in_file")
     
-    th_wm = pe.Node(interface=fsl.Threshold(), name="th_wm")
-    th_wm.inputs.direction = "below"
-    th_wm.inputs.thresh = 0.2
-    th_gm = th_wm.clone("th_gm")
+    threshold_FA = pe.Node(interface = fsl.maths.Threshold(), name = "threhsold_FA")
+    threshold_FA.inputs.thresh = 0.3
+    pipeline.connect(inputnode, "FA", threshold_FA, "in_file")
     
-    wm_gm_interface = pe.Node(fsl.ApplyMask(), name="wm_gm_interface")
-    
-    bet_t1 = pe.Node(fsl.BET(), name="bet_t1")
-    
-    coregister_t1_to_dwi = pe.Node(interface=fsl.FLIRT(), name="coregister_t1_to_dwi")
-    
-    invert_dwi_to_t1_xfm = pe.Node(interface=fsl.ConvertXFM(), name="invert_dwi_to_t1_xfm")
-    invert_dwi_to_t1_xfm.inputs.invert_xfm = True
-    
-    reslice_gm = pe.Node(interface=fsl.FLIRT(), name="reslice_gm")
-    reslice_gm.inputs.apply_xfm = True
-    
-    reslice_wm = reslice_gm.clone("reslice_wm")
+    mask_thresholded_FA = pe.Node(interface=fsl.maths.ApplyMask(), name="mask_thresholded_FA")
+    pipeline.connect(threshold_FA, "out_file", mask_thresholded_FA, "in_file")
+    pipeline.connect(erode_mask, "out_file", mask_thresholded_FA, "mask_file")
     
     particles2trackvis = pe.Node(interface= neuroutils.Particle2Trackvis(), name='particles2trackvis')
     
@@ -647,7 +676,6 @@ def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
     smooth_tracks = pe.Node(interface=dt.SplineFilter(), name="smooth_tracks")
     smooth_tracks.inputs.step_length = 0.5
     
-    pipeline = pe.Workflow(name=name)
     pipeline.connect([(inputnode, first_dwi, [("dwi", "in_file")]),
                       (inputnode, first_epi, [("epi", "in_file")]),
                        
@@ -672,25 +700,27 @@ def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
                       (reslice_mask, probtractx, [("out_file", "mask")]),
                       #(threshold, probtractx, [("out_file", "waypoints")]),
                       
-                      (inputnode, segment, [("T1", "data")]),
-                      
-                      (inputnode, bet_t1, [("T1", "in_file")]),
-                      (bet_t1, coregister_t1_to_dwi, [("out_file", "reference")]),
-                      (first_dwi, coregister_t1_to_dwi, [("roi_file", "in_file")]),
-                      (coregister_t1_to_dwi, invert_dwi_to_t1_xfm, [("out_matrix_file", "in_file")]),
-                      
-                      (invert_dwi_to_t1_xfm, reslice_gm, [("out_file", "in_matrix_file")]),
-                      (segment, reslice_gm, [("native_gm_image", "in_file")]),
-                      (first_dwi, reslice_gm, [("roi_file", "reference")]),
-                      (reslice_gm, th_gm, [("out_file", "in_file")]),
-                      (th_gm, wm_gm_interface, [("out_file", "in_file")]),
-                      
-                      (invert_dwi_to_t1_xfm, reslice_wm, [("out_file", "in_matrix_file")]),
-                      (segment, reslice_wm, [("native_wm_image", "in_file")]),
-                      (first_dwi, reslice_wm, [("roi_file", "reference")]),
-                      (reslice_wm, th_wm, [("out_file", "in_file")]),
-                      (th_wm, wm_gm_interface, [("out_file", "mask_file")]),
-                      (wm_gm_interface, probtractx, [("out_file", "seed")]),
+#                      (inputnode, segment, [("T1", "data")]),
+#                      
+#                      (inputnode, bet_t1, [("T1", "in_file")]),
+#                      (bet_t1, coregister_t1_to_dwi, [("out_file", "reference")]),
+#                      (first_dwi, coregister_t1_to_dwi, [("roi_file", "in_file")]),
+#                      (coregister_t1_to_dwi, invert_dwi_to_t1_xfm, [("out_matrix_file", "in_file")]),
+#                      
+#                      (invert_dwi_to_t1_xfm, reslice_gm, [("out_file", "in_matrix_file")]),
+#                      (segment, reslice_gm, [("native_gm_image", "in_file")]),
+#                      (first_dwi, reslice_gm, [("roi_file", "reference")]),
+#                      (reslice_gm, th_gm, [("out_file", "in_file")]),
+#                      (th_gm, wm_gm_interface, [("out_file", "in_file")]),
+#                      
+#                      (invert_dwi_to_t1_xfm, reslice_wm, [("out_file", "in_matrix_file")]),
+#                      (segment, reslice_wm, [("native_wm_image", "in_file")]),
+#                      (first_dwi, reslice_wm, [("roi_file", "reference")]),
+#                      (reslice_wm, th_wm, [("out_file", "in_file")]),
+#                      (th_wm, wm_gm_interface, [("out_file", "mask_file")]),
+#                      (wm_gm_interface, probtractx, [("out_file", "seed")]),
+                       (mask_thresholded_FA, probtractx, [("out_file", "seed")]),
+
                       
                       (probtractx, particles2trackvis, [('particle_files', 'particle_files')]),
                       (reslice_mask, particles2trackvis, [("out_file", "reference_file")]),
