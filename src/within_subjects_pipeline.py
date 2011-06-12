@@ -1,6 +1,3 @@
-import pydevd
-pydevd.set_pm_excepthook()
-
 import os
 import nipype.interfaces.utility as util     # utility
 import nipype.pipeline.engine as pe          # pypeline engine
@@ -102,6 +99,8 @@ within_subjects_pipeline.connect([(subjects_infosource, compare_datagrabber, [('
                           (make_titles_diff, plot_diff, [('title', 'title')]),
                           (plot_diff, datasink, [('plot', 'reports.within_subjects.difference_maps')]),
 ])
+
+
 
 if __name__ == '__main__':
     within_subjects_pipeline.run(plugin_args={'n_procs': 4})
