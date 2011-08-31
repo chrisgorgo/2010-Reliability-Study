@@ -26,7 +26,7 @@ thr_method_infosource.iterables = ('thr_method', thr_methods)
 
 compare_datagrabber = pe.Node(interface=nio.DataGrabber(infields=['subject_id', 'task_name', 'thr_method', 'roi'],
                                                outfields=['first_map', 'second_map', 'T1']),
-                     name = 'compare_datagrabber')
+                     name = 'compare_datagrabber', overwrite=True)
 
 compare_datagrabber.inputs.base_directory = '/media/data/2010reliability/workdir_fmri/group/first_level/'
 compare_datagrabber.inputs.template = 'main/model/%s/_subject_id_%s/_session_%s/_task_name_%s/*topo_fdr/mapflow/*_topo_fdr*/*_map_thr.img'
@@ -75,11 +75,17 @@ compare_datagrabber.inputs.roi = True
 sqlitesink.inputs.roi = True
 sqlitesink.inputs.masked_comparison = True
 
+def trans_thr_method(thr_method):
+    if thr_method == "topo_ggmm":
+        return "threshold_topo_ggmm"
+    else:
+        return ""
+
 within_subjects_pipeline = pe.Workflow(name="within_subjects_pipeline_roi")
 within_subjects_pipeline.base_dir = working_dir
 within_subjects_pipeline.connect([(subjects_infosource, compare_datagrabber, [('subject_id', 'subject_id')]),
                           (tasks_infosource, compare_datagrabber, [('task_name', 'task_name')]),
-                          (thr_method_infosource, compare_datagrabber, [('thr_method', 'thr_method')]),
+                          (thr_method_infosource, compare_datagrabber, [(('thr_method', trans_thr_method), 'thr_method')]),
                           (compare_datagrabber, compare_thresholded_maps, [('first_map', 'volume1'),
                                                                            ('second_map', 'volume2')]),
                           
@@ -111,7 +117,7 @@ tasks_infosource = within_subjects_pipeline_noroi.get_node("tasks_infosource")
 reslice_roi_mask = pe.Node(interface=spm.Coregister(), name="reslice_roi_mask")
 reslice_roi_mask.inputs.jobtype="write"
 reslice_roi_mask.inputs.write_interp = 0
-reslice_roi_mask.inputs.target = "/media/data/2010reliability/normsize.nii"
+reslice_roi_mask.inputs.target = "/media/data/2010reliability/normsize.img"
 
 def dilateROIMask(filename, dilation_size):
     import numpy as np
@@ -168,8 +174,8 @@ within_subjects_pipeline_noroi.connect([(reslice_roi_mask, select_mask, [(('core
                                                                                     (('masked_comparison',return_false), 'roi')])])
 
 if __name__ == '__main__':
-    #within_subjects_pipeline_noroi.run(plugin_args={'n_procs': 4})
-    #within_subjects_pipeline_noroi.write_graph()
-    within_subjects_pipeline.run(plugin_args={'n_procs': 4})
-    within_subjects_pipeline.write_graph()
+    within_subjects_pipeline_noroi.run(plugin_args={'n_procs': 4})
+    within_subjects_pipeline_noroi.write_graph()
+    #within_subjects_pipeline.run(plugin_args={'n_procs': 4})
+    #within_subjects_pipeline.write_graph()
 

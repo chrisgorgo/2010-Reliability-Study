@@ -1,6 +1,3 @@
-import pydevd
-pydevd.set_pm_excepthook()
-
 import nipype.interfaces.utility as util     # utility
 import nipype.pipeline.engine as pe          # pypeline engine
 import nipype.interfaces.io as nio           # Data i/o
@@ -63,16 +60,6 @@ normalize = pe.Node(interface=spm.Normalize(jobtype="write"), name="normalize")
 
 functional_run = create_pipeline_functional_run(name="functional_run", series_format="4d")
 
-get_session_id = pe.Node(interface=utility.Function(input_names=['session', 'subject_id'], 
-                                                    output_names=['session_id'], 
-                                                    function=getSessionId), 
-                         name="get_session_id")
-
-get_onsets = pe.Node(interface=utility.Function(input_names=['task_name', 'line_bisection_log', 'delay'], 
-                                                    output_names=['onsets'], 
-                                                    function=getOnsets), 
-                         name="get_onsets")
-get_onsets.inputs.delay = 4*2.5
 
 
 datasink = pe.Node(interface = DataSink(), name='datasink')
@@ -90,17 +77,21 @@ sqlitesink = pe.MapNode(interface = SQLiteSink(input_names=["subject_id",
                                                             'task_name', 
                                                             'contrast_name',
                                                             'cluster_forming_threshold',
+                                                            'cluster_forming_threshold_fwe',
                                                             'selected_model',
                                                             'activation_forced',
                                                             'n_clusters',
                                                             'pre_topo_n_clusters',
-                                                            'roi']), 
+                                                            'roi',
+                                                            'gaussian_mean']), 
                         name="sqlitesink", 
                         iterfield=["contrast_name", 'cluster_forming_threshold',
                                                             'selected_model',
                                                             'activation_forced',
                                                             'n_clusters',
-                                                            'pre_topo_n_clusters'])
+                                                            'pre_topo_n_clusters',
+                                                            'cluster_forming_threshold_fwe',
+                                                            'gaussian_mean'])
 sqlitesink.inputs.database_file = dbfile
 sqlitesink.inputs.table_name = "reliability2010_ggmm_thresholding"
 
@@ -182,8 +173,61 @@ def get_vox_dims(volume):
     voxdims = hdr.get_zooms()
     return [float(voxdims[0]), float(voxdims[1]), float(voxdims[2])]
 
+get_session_id = pe.Node(interface=util.Function(input_names=['session', 'subject_id'], 
+                                                    output_names=['session_id'], 
+                                                    function=getSessionId), 
+                         name="get_session_id")
+
+get_onsets = pe.Node(interface=util.Function(input_names=['task_name', 'line_bisection_log', 'delay'], 
+                                                    output_names=['onsets'], 
+                                                    function=getOnsets),
+                     name="get_onsets")
+get_onsets.inputs.delay = 4*2.5
+
 main_pipeline = pe.Workflow(name="pipeline")
 main_pipeline.base_dir = working_dir
+
+reslice_roi_mask = pe.Node(interface=spm.Coregister(), name="reslice_roi_mask")
+reslice_roi_mask.inputs.jobtype="write"
+reslice_roi_mask.inputs.write_interp = 0
+reslice_roi_mask.inputs.target = "/media/data/2010reliability/episize.nii"
+
+def dilateROIMask(filename, dilation_size):
+    import numpy as np
+    import nibabel as nb
+    from scipy.ndimage.morphology import grey_dilation
+    import os
+    
+    nii = nb.load(filename)
+    origdata = nii.get_data()
+    newdata = grey_dilation(origdata , (2 * dilation_size + 1,
+                                       2 * dilation_size + 1,
+                                       2 * dilation_size + 1))
+    nb.save(nb.Nifti1Image(newdata, nii.get_affine(), nii.get_header()), 'dialted_mask.nii')
+    return os.path.abspath('dialted_mask.nii')
+
+dilate_roi_mask = pe.Node(interface=util.Function(input_names=['filename', 'dilation_size'], 
+                                                  output_names=['dilated_file'],
+                                                  function=dilateROIMask),
+                          name = 'dilate_roi_mask')
+
+def getMaskFile(task_name):
+    from variables import design_parameters
+    return design_parameters[task_name]['mask_file']
+    
+get_mask_file = pe.Node(interface=util.Function(function=getMaskFile,
+                                                input_names=['subject_id', 'task_name'],
+                                                output_names = "mask_file"),
+                        name="get_mask_file")
+main_pipeline.connect([(tasks_infosource, get_mask_file, [('task_name', 'task_name')]),
+                       (subjects_infosource, get_mask_file, [('subject_id', 'subject_id')]),
+                       (get_mask_file, dilate_roi_mask, [('mask_file', 'filename')]),
+                       (tasks_infosource, dilate_roi_mask, [(('task_name', getDilation), 'dilation_size')]),
+                       (dilate_roi_mask, reslice_roi_mask, [('dilated_file',"source")]),
+                       ])
+
+
+
 main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 'subject_id')]),
                        (struct_datasource, coregister_T1s, [(('T1', pickFirst), 'source'),
                                                             (('T1', pickSecond), 'target')]),
@@ -206,15 +250,13 @@ main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 
                        (func_datasource, functional_run, [("func", "inputnode.func")]),
                        (normalize, functional_run, [("normalized_files","inputnode.struct")]),
                        (tasks_infosource, functional_run, [(('task_name', getConditions), 'inputnode.conditions'),
-#                                                                         (('task_name', getOnsets), 'inputnode.onsets'),
                                                                          (('task_name', getDurations), 'inputnode.durations'),
                                                                          (('task_name', getTR), 'inputnode.TR'),
                                                                          (('task_name', getContrasts), 'inputnode.contrasts'),
                                                                          (('task_name', getUnits), 'inputnode.units'),
                                                                          (('task_name', getSparse), 'inputnode.sparse'),
-                                                                         (('task_name', getAtlasLabels), 'inputnode.atlas_labels'),
-                                                                         (('task_name', getDilation), 'inputnode.dilation_size'),
                                                                          ('task_name', 'inputnode.task_name')]),
+                       (reslice_roi_mask, functional_run, [('coregistered_source','inputnode.mask_file')]),
                        (tasks_infosource, get_onsets, [('task_name', 'task_name')]),
                        (func_datasource, get_onsets, [('line_bisection_log', 'line_bisection_log')]),
                        (get_onsets, functional_run, [('onsets', 'inputnode.onsets')]),                            
@@ -222,7 +264,11 @@ main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 
                        (functional_run, datasink, [('report.visualise_thresholded_stat.reslice_overlay.coregistered_source', 'volumes.t_maps.thresholded')]),
                        (functional_run, datasink, [('report.visualise_unthresholded_stat.reslice_overlay.coregistered_source', 'volumes.t_maps.unthresholded')]),
                        (normalize, datasink, [("normalized_files","volumes.T1")]),
+                       (functional_run, datasink, [('model.contrastestimate.con_images', 'volumes.con_images')]),
+                       
                        (functional_run, datasink, [('report.psmerge_all.merged_file', 'reports')]),
+#                       (functional_run, datasink, [('preproc_func.pre_ica.report_dir', 'reports.pre_ica')]),
+#                       (functional_run, datasink, [('preproc_func.post_ica.report_dir', 'reports.post_ica')]),
                        
                        (subjects_infosource, sqlitesink, [('subject_id', 'subject_id')]),
                        (sessions_infosource, sqlitesink, [('session', 'session')]),
@@ -230,6 +276,8 @@ main_pipeline.connect([(subjects_infosource, struct_datasource, [('subject_id', 
                                                        (('task_name', getStatLabels), 'contrast_name')]),
                        (roi_infosource, sqlitesink, [('roi', 'roi')]),
                        (functional_run, sqlitesink, [('model.threshold_topo_ggmm.ggmm.threshold','cluster_forming_threshold'),
+                                                     ('model.threshold_topo_ggmm.ggmm.gaussian_mean','gaussian_mean'),
+                                                     ('model.threshold_topo_fdr.cluster_forming_thr','cluster_forming_threshold_fwe'),
                                                      ('model.threshold_topo_ggmm.ggmm.selected_model', 'selected_model'),
                                                      ('model.threshold_topo_ggmm.topo_fdr.activation_forced','activation_forced'),
                                                      ('model.threshold_topo_ggmm.topo_fdr.n_clusters','n_clusters'),

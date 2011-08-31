@@ -106,8 +106,8 @@ def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sp
     preproc_func = pe.Workflow(name="preproc_func")
     preproc_func.connect([
                           (inputnode,skip, [("func", "in_file")]),
-                          (inputnode, pre_ica, [("func", "in_files"),
-                                                ("TR", "tr_sec")]),
+#                          (inputnode, pre_ica, [("func", "in_files"),
+#                                                ("TR", "tr_sec")]),
                           
                           (coregister, compute_mask, [('coregistered_source','mean_volume')]),
                           (skip, slice_timing, [("roi_file", "in_files"),
@@ -133,9 +133,9 @@ def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sp
                           (coregister, susan_smooth, [("coregistered_files","inputnode.in_files")]),
                           (compute_mask, susan_smooth,[('brain_mask','inputnode.mask_file')]),
                           
-                          (susan_smooth, post_ica, [("outputnode.smoothed_files", "in_files")]),
-                          (inputnode, post_ica, [("TR", "tr_sec")]),
-                          (compute_mask,post_ica,[('brain_mask','mask')]),
+#                          (susan_smooth, post_ica, [("outputnode.smoothed_files", "in_files")]),
+#                          (inputnode, post_ica, [("TR", "tr_sec")]),
+#                          (compute_mask,post_ica,[('brain_mask','mask')]),
                           
 #                          (coregister, smooth, [("coregistered_files","in_files")]),
                           
@@ -180,7 +180,7 @@ def _get_microtime_resolution(volume, sparse):
 
 def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = True, name="model", save_residuals=False):
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['outlier_files', "realignment_parameters", "functional_runs", "mask",
-                                                                 'conditions','onsets','durations','TR','contrasts','units','sparse', 'atlas_labels', 'dilation_size']), name="inputnode")
+                                                                 'conditions','onsets','durations','TR','contrasts','units','sparse', 'roi_mask']), name="inputnode")
     
     
     modelspec = pe.Node(interface=model.SpecifySPMModel(), name= "modelspec")
@@ -242,22 +242,20 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
             ])
     else:
         
-        pick_mask = pe.Node(PickAtlas(), name="pick_mask")
-        pick_mask.inputs.atlas = "/usr/share/data/talairach-daemon-atlas/Talairach/Talairach-labels-1mm.nii.gz"
-        pick_mask.inputs.output_file = "roi_mask.nii"
-        model_pipeline.connect(inputnode, 'atlas_labels', pick_mask, 'labels')
-        model_pipeline.connect(inputnode, 'dilation_size', pick_mask, 'dilation_size')
+#        pick_mask = pe.Node(PickAtlas(), name="pick_mask")
+#        pick_mask.inputs.atlas = "/usr/share/data/talairach-daemon-atlas/Talairach/Talairach-labels-1mm.nii.gz"
+#        pick_mask.inputs.output_file = "roi_mask.nii"
+#        model_pipeline.connect(inputnode, 'atlas_labels', pick_mask, 'labels')
+#        model_pipeline.connect(inputnode, 'dilation_size', pick_mask, 'dilation_size')
         
-        reslice_mask = pe.Node(spm.Coregister(jobtype="write", write_interp=0), name="reslice_mask")
-        
-        contrain_mask = pe.Node(fsl.maths.ApplyMask(), name='constrain_mask')
-        model_pipeline.connect(reslice_mask, 'coregistered_source', contrain_mask, 'in_file')
-        model_pipeline.connect(inputnode, 'mask', contrain_mask, 'mask_file')
+        constrain_mask = pe.Node(fsl.maths.ApplyMask(), name='constrain_mask')
+        model_pipeline.connect(inputnode, 'roi_mask', constrain_mask, 'in_file')
+        model_pipeline.connect(inputnode, 'mask', constrain_mask, 'mask_file')
         
         merge_roi = pe.Node(interface=utility.Merge(2),
                          name='merge_roi')
         model_pipeline.connect(inputnode, 'mask', merge_roi, 'in1')
-        model_pipeline.connect(contrain_mask, 'out_file', merge_roi, 'in2')
+        model_pipeline.connect(constrain_mask, 'out_file', merge_roi, 'in2')
         
         select_roi = pe.Node(interface=utility.Select(), name="select_roi")
         model_pipeline.connect(merge_roi, 'out', select_roi, 'inlist')
@@ -282,6 +280,7 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
             level1design.inputs.model_serial_correlations = "none"
             
         level1design.inputs.timing_units       = modelspec.inputs.output_units
+        #level1design.inputs.global_intensity_normalization = 'scaling'
         
         #level1design.inputs.interscan_interval = modelspec.inputs.time_repetition
 #        if sparse:
@@ -301,7 +300,9 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
         rename_t_maps = pe.MapNode(interface = Rename(format_string="%(contrast_name)s_t_map", keep_ext=True), name="rename_t_maps", iterfield=['in_file', 'contrast_name'] )
         #contrastestimate.inputs.contrasts = contrasts
         
-        threshold_topo_fdr = pe.MapNode(interface= spm.Threshold(), name="threshold_topo_fdr", iterfield=['contrast_index', 'stat_image'])
+        threshold_topo_fdr = pe.MapNode(interface= spm.Threshold(), 
+                                        name="threshold_topo_fdr", 
+                                        iterfield=['contrast_index', 'stat_image'])
         #threshold_topo_fdr.inputs.contrast_index = range(1,len(contrasts)+1)
         
         threshold_topo_ggmm = neuroutils.CreateTopoFDRwithGGMM("threshold_topo_ggmm")
@@ -328,9 +329,7 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
         def getLabels(contrasts):
             return [ contrast[0].lower() for contrast in contrasts]
         
-        model_pipeline.connect([(pick_mask, reslice_mask, [('mask_file', 'source')]),
-                                (inputnode, reslice_mask, [('mask','target')]),
-                                
+        model_pipeline.connect([                               
                                 (modelspec, level1design,[('session_info','session_info')]),
                                 (mask, level1design, [('mask','mask_image')]),
                                 (inputnode, level1design, [('TR', 'interscan_interval'),
@@ -442,40 +441,50 @@ def create_report_pipeline(pipeline_name="report"):#, contrasts):
                     ])
     return report
 
-def create_pipeline_functional_run(name="functional_run", series_format="3d"):#, conditions, onsets, durations, tr, contrasts, units='scans', n_slices=30, sparse=False, n_skip=4):
+def create_pipeline_functional_run(name="functional_run", series_format="3d", preproc = True):#, conditions, onsets, durations, tr, contrasts, units='scans', n_slices=30, sparse=False, n_skip=4):
     
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct", 'conditions','onsets','durations','TR','contrasts',
-                                                                 'units','sparse', 'task_name', 'atlas_labels', 'dilation_size']), name="inputnode")
+    pipeline = pe.Workflow(name=name)
+    if preproc:
+        inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct", 'conditions','onsets','durations','TR','contrasts',
+                                                                 'units','sparse', 'task_name', 'mask_file']), name="inputnode")
+    else:
+        inputnode = pe.Node(interface=util.IdentityInterface(fields=['conditions','onsets','durations','TR','contrasts',
+                                                                 'units','sparse', 'task_name', 'mask_file']), name="inputnode")
+    
     
 #    if sparse:
 #        real_tr = tr/2
 #    else:
 #        real_tr = tr
     
-    
-    preproc_func = create_preproc_func_pipeline()#n_skip=n_skip, n_slices=n_slices, tr=tr, sparse=sparse, ref_slice=n_slices/2)
+    if preproc:
+        preproc_func = create_preproc_func_pipeline()#n_skip=n_skip, n_slices=n_slices, tr=tr, sparse=sparse, ref_slice=n_slices/2)
+        if series_format == "3d":
+            merge = pe.Node(interface=fsl.Merge(dimension="t"), name="merge")
+            pipeline.connect([(inputnode, merge, [("func", "in_files")]),
+                              (merge, preproc_func, [("merged_file", "inputnode.func")])])
+        else:
+            pipeline.connect([(inputnode, preproc_func, [("func", "inputnode.func")])])
     
     model_pipeline = create_model_fit_pipeline()#contrasts=contrasts, conditions=conditions, onsets=onsets, durations=durations, tr=tr, units=units, n_slices=n_slices, sparse=sparse, ref_slice= n_slices/2)
     
     report = create_report_pipeline()#pipeline_name=name, contrasts=contrasts)
     
-    pipeline = pe.Workflow(name=name)
+
     
-    if series_format == "3d":
-        merge = pe.Node(interface=fsl.Merge(dimension="t"), name="merge")
-        pipeline.connect([(inputnode, merge, [("func", "in_files")]),
-                          (merge, preproc_func, [("merged_file", "inputnode.func")])])
-    else:
-        pipeline.connect([(inputnode, preproc_func, [("func", "inputnode.func")])])
-        
-    pipeline.connect([
-                      (inputnode, preproc_func, [("struct","inputnode.struct"),
-                                                 ('TR', "inputnode.TR"),
-                                                 ('sparse', "inputnode.sparse")]),
-                      (preproc_func, model_pipeline, [('outputnode.realignment_parameters','inputnode.realignment_parameters'),
-                                                      ('outputnode.preproced_files','inputnode.functional_runs'),
-                                                      ('outputnode.outlier_files','inputnode.outlier_files'),
-                                                      ('outputnode.mask_file','inputnode.mask')]),
+
+    if preproc:    
+        pipeline.connect([
+                          (inputnode, preproc_func, [("struct","inputnode.struct"),
+                                                     ('TR', "inputnode.TR"),
+                                                     ('sparse', "inputnode.sparse")]),
+                          (preproc_func, model_pipeline, [('outputnode.realignment_parameters','inputnode.realignment_parameters'),
+                                                          ('outputnode.preproced_files','inputnode.functional_runs'),
+                                                          ('outputnode.outlier_files','inputnode.outlier_files'),
+                                                          ('outputnode.mask_file','inputnode.mask')])
+                          ])
+    
+    pipeline.connect([                 
                       (inputnode, model_pipeline, [('contrasts', 'inputnode.contrasts'),
                                                    ('conditions', 'inputnode.conditions'),
                                                    ('onsets', 'inputnode.onsets'),
@@ -483,20 +492,22 @@ def create_pipeline_functional_run(name="functional_run", series_format="3d"):#,
                                                    ('TR', 'inputnode.TR'),
                                                    ('units', 'inputnode.units'),
                                                    ('sparse', "inputnode.sparse"),
-                                                   ('atlas_labels', 'inputnode.atlas_labels'),
-                                                   ('dilation_size', 'inputnode.dilation_size')]),
-                      (inputnode, report, [("struct", "inputnode.struct"),
-                                            ("contrasts", "inputnode.contrasts"),
+                                                   ('mask_file', 'inputnode.roi_mask')]),
+                      (inputnode, report, [("contrasts", "inputnode.contrasts"),
                                            ('task_name', 'inputnode.task_name')]),
                       (model_pipeline, report, [("rename_t_maps.out_file","inputnode.raw_stat_images"),
                                                 ("level1estimate.mask_image", "inputnode.mask"),
                                                 ("threshold.thresholded_map", "inputnode.thresholded_stat_images"),
 #                                                ("threshold_topo_ggmm.topo_fdr.thresholded_map", "inputnode.ggmm_thresholded_stat_images"),
 #                                                ("threshold_topo_ggmm.ggmm.histogram", "inputnode.ggmm_hist")
-                                                ]),
+                                                ])
+                      ])
+    if preproc:
+        pipeline.connect([ 
                       
                       (preproc_func, report,[("outputnode.realignment_parameters","inputnode.realignment_parameters"),
                                              ('art.outlier_files', 'inputnode.outlier_files')]),
+                      (inputnode, report, [("struct", "inputnode.struct")])
 #                      
                       ])
     return pipeline

@@ -10,6 +10,11 @@ import nipype.algorithms.misc as misc
 import neuroutils
 from nipype.interfaces.io import DataSink, SQLiteSink
 from variables import results_dir,working_dir, dbfile, subjects, tasks, thr_methods, sessions, getStatLabels, config, roi
+from nipype.interfaces.traits_extension import Undefined
+from nipype.interfaces import spm
+from pipeline import getMaskFile, getDilation
+from within_subjects_pipeline import chooseindex_bool
+from within_run_pipeline import trans_thr_method
 
 tasks_infosource = pe.Node(interface=util.IdentityInterface(fields=['task_name']),
                            name="tasks_infosource")
@@ -22,10 +27,6 @@ thr_method_infosource.iterables = ('thr_method', thr_methods)
 sessions_infosource = pe.Node(interface=util.IdentityInterface(fields=['session']),
                               name="sessions_infosource")
 sessions_infosource.iterables = ('session', sessions)
-
-roi_infosource = pe.Node(interface=util.IdentityInterface(fields=['roi']),
-                              name="roi_infosource")
-roi_infosource.iterables = ('roi', roi)
 
 pairs=[]
 for i, subject_id1 in enumerate(subjects):
@@ -47,16 +48,17 @@ datasink.inputs.regexp_substitutions = [
                                 ]
 
 datagrabber = pe.Node(interface=nio.DataGrabber(infields=['subject_id1', 'subject_id2', 'task_name', 'thr_method', 'session'],
-                                       outfields=['map', 'T1']),
-             name = 'datagrabber')
+                                       outfields=['map1','map1', 'T1']),
+             name = 'datagrabber', overwrite=True)
 
-datagrabber.inputs.base_directory = os.path.join(results_dir, "volumes")
-datagrabber.inputs.template = 't_maps/thresholded/_subject_id_%s/_session_%s/_task_name_%s/_roi_%s/_thr_method_%s/*.img'
-datagrabber.inputs.field_template = dict(T1= 'T1/_subject_id_%s/*.nii')
-datagrabber.inputs.template_args = dict(map1 = [['subject_id1', 'session', 'task_name', 'roi', 'thr_method']],
-                                         map2 = [['subject_id2', 'session', 'task_name', 'roi', 'thr_method']],
-                                         T1 = [['subject_id1']])
+datagrabber.inputs.base_directory = '/media/data/2010reliability/workdir_fmri/group/first_level/'
+datagrabber.inputs.template = 'main/model/%s/_subject_id_%s/_session_%s/_task_name_%s/*topo_fdr/mapflow/*_topo_fdr*/*_map_thr.img'
+datagrabber.inputs.field_template = dict(T1= 'preproc/realign_and_coregister/_subject_id_%s/average_T1s/*.nii')
+datagrabber.inputs.template_args = dict(map1 = [['thr_method', 'subject_id1', 'first', 'task_name']],
+                                        map2 = [['thr_method', 'subject_id2', 'second', 'task_name']],
+                                                T1 = [['subject_id1']])
 datagrabber.inputs.sort_filelist = True
+datagrabber.inputs.overwrite = True
 
 compare_thresholded_maps = pe.MapNode(interface=misc.Overlap(), name="compare_thresholded_maps", iterfield=['volume1', 'volume2'])
 plot_diff = pe.MapNode(interface=neuroutils.Overlay(overlay_range = (1, 3)), name="plot", iterfield=['overlay', 'title'])
@@ -72,7 +74,7 @@ sqlitesink = pe.MapNode(interface = SQLiteSink(input_names=["subject_id1", "subj
                                                             "session",
                                                             'task_name', 'contrast_name', 
                                                             'dice', 'jaccard', 
-                                                            'volume_difference', 'thr_method', 'roi']), 
+                                                            'volume_difference', 'thr_method', 'roi', 'masked_comparison']), 
                         name="sqlitesink", 
                         iterfield=["contrast_name", "dice", 'jaccard', 'volume_difference'])
 sqlitesink.inputs.database_file = dbfile
@@ -84,13 +86,22 @@ def pickFirst(l):
 def pickSecond(l):
     return l[1]
 
-between_subjects_pipeline = pe.Workflow(name="between_subjects_pipeline")
+between_subjects_pipeline = pe.Workflow(name="between_subjects_pipeline_roi")
 between_subjects_pipeline.base_dir = working_dir
+
+datagrabber.inputs.roi = True
+sqlitesink.inputs.roi = True
+sqlitesink.inputs.masked_comparison = True
+
+def trans_thr_method(thr_method):
+    if thr_method == "topo_ggmm":
+        return "threshold_topo_ggmm"
+    else:
+        return ""
 
 between_subjects_pipeline.connect([
                           (tasks_infosource, datagrabber, [('task_name', 'task_name')]),
-                          (thr_method_infosource, datagrabber, [('thr_method', 'thr_method')]),
-                          (roi_infosource, datagrabber, [('roi', 'roi')]),
+                          (thr_method_infosource, datagrabber, [(('thr_method', trans_thr_method), 'thr_method')]),
                           (sessions_infosource, datagrabber, [('session', 'session')]),
                           (compare_infosource, datagrabber, [(('compare', pickFirst), 'subject_id1'),
                                                              (('compare', pickSecond), 'subject_id2')]),
@@ -104,7 +115,6 @@ between_subjects_pipeline.connect([
                           (tasks_infosource, sqlitesink, [('task_name', 'task_name'),
                                                           (('task_name', getStatLabels), 'contrast_name')]),
                           (thr_method_infosource, sqlitesink, [('thr_method','thr_method')]),
-                          (roi_infosource, sqlitesink, [('roi', 'roi')]),
                           (sessions_infosource, sqlitesink, [('session', 'session')]),
                           (compare_infosource, sqlitesink, [(('compare', pickFirst), 'subject_id1'),
                                                                   (('compare', pickSecond), 'subject_id2')]),
@@ -123,6 +133,70 @@ between_subjects_pipeline.connect([
                   ])
         
 if __name__ == '__main__':
-    between_subjects_pipeline.run(plugin_args={'n_procs': 4})
-    #between_subjects_pipeline.run(plugin_args={'n_procs': 4})
+#    between_subjects_pipeline.run(plugin_args={'n_procs': 2})
     between_subjects_pipeline.write_graph()
+
+between_subjects_pipeline_noroi = between_subjects_pipeline.clone(name="between_subjects_pipeline_noroi")
+tasks_infosource = between_subjects_pipeline_noroi.get_node("tasks_infosource")
+
+reslice_roi_mask = pe.Node(interface=spm.Coregister(), name="reslice_roi_mask")
+reslice_roi_mask.inputs.jobtype="write"
+reslice_roi_mask.inputs.write_interp = 0
+reslice_roi_mask.inputs.target = "/media/data/2010reliability/normsize.img"
+def dilateROIMask(filename, dilation_size):
+    import numpy as np
+    import nibabel as nb
+    from scipy.ndimage.morphology import grey_dilation
+    import os
+    
+    nii = nb.load(filename)
+    origdata = nii.get_data()
+    newdata = grey_dilation(origdata , (2 * dilation_size + 1,
+                                       2 * dilation_size + 1,
+                                       2 * dilation_size + 1))
+    nb.save(nb.Nifti1Image(newdata, nii.get_affine(), nii.get_header()), 'dialted_mask.nii')
+    return os.path.abspath('dialted_mask.nii')
+
+dilate_roi_mask = pe.Node(interface=util.Function(input_names=['filename', 'dilation_size'], 
+                                                  output_names=['dilated_file'],
+                                                  function=dilateROIMask),
+                          name = 'dilate_roi_mask')
+between_subjects_pipeline_noroi.connect([(tasks_infosource, dilate_roi_mask, [(('task_name', getMaskFile), 'filename'),
+                                                                             (('task_name', getDilation), 'dilation_size')]),
+                                        
+                                        (dilate_roi_mask, reslice_roi_mask, [('dilated_file',"source")]),
+               ])
+
+compare_datagrabber = between_subjects_pipeline_noroi.get_node("datagrabber")
+sqlitesink = between_subjects_pipeline_noroi.get_node("sqlitesink")
+compare_thresholded_maps = between_subjects_pipeline_noroi.get_node("compare_thresholded_maps")
+
+compare_datagrabber.inputs.roi = False
+sqlitesink.inputs.roi = False
+sqlitesink.inputs.masked_comparison = Undefined
+
+masked_comparison_infosource = pe.Node(interface=util.IdentityInterface(fields=['masked_comparison']),
+                                       name="masked_comparison_infosource")
+masked_comparison_infosource.iterables = [('masked_comparison', [True, False])]
+
+select_mask = pe.Node(interface=util.Select(), name="select_mask")
+
+def prepend_by_undefiend(object):
+    from nipype.interfaces.traits_extension import Undefined
+    return [Undefined, object]
+
+def chooseindex_bool(roi):
+    return {True:1, False:0}[roi]
+def return_false(whatever):
+    return False
+
+between_subjects_pipeline_noroi.connect([(reslice_roi_mask, select_mask, [(('coregistered_source', prepend_by_undefiend),'inlist')]),
+                                        (masked_comparison_infosource, select_mask, [(('masked_comparison', chooseindex_bool),'index')]),
+                                        (select_mask, compare_thresholded_maps, [('out', 'mask_volume')]),
+                                        (masked_comparison_infosource, sqlitesink, [('masked_comparison', 'masked_comparison'),
+                                                                                    (('masked_comparison', return_false), 'roi')])])
+
+if __name__ == '__main__':
+    between_subjects_pipeline_noroi.run(plugin_args={'n_procs': 4})
+    between_subjects_pipeline_noroi.write_graph()
+
