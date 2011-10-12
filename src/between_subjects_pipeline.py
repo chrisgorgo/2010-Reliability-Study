@@ -61,6 +61,9 @@ datagrabber.inputs.sort_filelist = True
 datagrabber.inputs.overwrite = True
 
 compare_thresholded_maps = pe.MapNode(interface=misc.Overlap(), name="compare_thresholded_maps", iterfield=['volume1', 'volume2'])
+thresholded_maps_distance = pe.MapNode(interface=misc.Distance(method="eucl_max"), 
+                                       name="thresholded_maps_distance", 
+                                       iterfield=['volume1', 'volume2'])
 plot_diff = pe.MapNode(interface=neuroutils.Overlay(overlay_range = (1, 3)), name="plot", iterfield=['overlay', 'title'])
 
 def _make_titles(dice, jaccard, contrast, subject_id1, subject_id2, prefix=''):
@@ -108,6 +111,10 @@ between_subjects_pipeline.connect([
                   
                           (datagrabber, compare_thresholded_maps, [('map1', 'volume1'),
                                                                    ('map2', 'volume2')]),
+                          (datagrabber, thresholded_maps_distance, [('map1', 'volume1'),
+                                                                    ('map2', 'volume2')]),
+
+                          (thresholded_maps_distance, sqlitesink, [('distance', "distance")]),
                   
                           (compare_thresholded_maps, sqlitesink, [('dice', "dice",),
                                                                   ('jaccard', 'jaccard'),

@@ -11,6 +11,7 @@ from variables import results_dir,working_dir, dbfile, subjects, tasks, thr_meth
 from pipeline import getMaskFile, getDilation
 from nipype.interfaces import spm
 from nipype.interfaces.traits_extension import Undefined
+from nipype.interfaces.fsl.maths import Threshold
 
 subjects_infosource = pe.Node(interface=util.IdentityInterface(fields=['subject_id']),
                               name="subjects_infosource")
@@ -37,10 +38,15 @@ compare_datagrabber.inputs.template_args = dict(first_map = [['thr_method', 'sub
 compare_datagrabber.inputs.sort_filelist = True
 compare_datagrabber.overwrite = True
 
+just_the_overlap = pe.MapNode(interface=Threshold(thresh=2.5), name="just_the_overlap", iterfield=['in_file'])
+
 def _make_titles(dice, jaccard, volume, contrast, subject_id, prefix=''):
     return prefix + " %s: dice = %f, jaccard = %f, volume = %d, subject_id = %s"%(contrast, dice, jaccard, volume, subject_id.split('-')[0])
 
 compare_thresholded_maps = pe.MapNode(interface=misc.Overlap(), name="compare_thresholded_maps", iterfield=['volume1', 'volume2'])
+thresholded_maps_distance = pe.MapNode(interface=misc.Distance(method="eucl_max"), 
+                                       name="thresholded_maps_distance", 
+                                       iterfield=['volume1', 'volume2'])
 plot_diff = pe.MapNode(interface=neuroutils.Overlay(overlay_range = (1, 3)), name="plot", iterfield=['overlay', 'title'])
 make_titles_diff = pe.MapNode(interface=util.Function(input_names=['dice', 'jaccard', 'volume', 'contrast', 'subject_id', 'prefix'], 
                                                  output_names=['title'], 
@@ -54,9 +60,10 @@ sqlitesink = pe.MapNode(interface = SQLiteSink(input_names=["subject_id",
                                                             'volume_difference', 
                                                             'thr_method',
                                                             'roi',
-                                                            'masked_comparison']), 
+                                                            'masked_comparison',
+                                                            'distance']), 
                         name="sqlitesink", 
-                        iterfield=["contrast_name", "dice", 'jaccard', 'volume_difference'])
+                        iterfield=["contrast_name", "dice", 'jaccard', 'volume_difference', 'distance'])
 sqlitesink.inputs.database_file = dbfile
 sqlitesink.inputs.table_name = "reliability2010_within_subjects"
 
@@ -88,16 +95,20 @@ within_subjects_pipeline.connect([(subjects_infosource, compare_datagrabber, [('
                           (thr_method_infosource, compare_datagrabber, [(('thr_method', trans_thr_method), 'thr_method')]),
                           (compare_datagrabber, compare_thresholded_maps, [('first_map', 'volume1'),
                                                                            ('second_map', 'volume2')]),
+                          (compare_datagrabber, thresholded_maps_distance, [('first_map', 'volume1'),
+                                                                           ('second_map', 'volume2')]),
                           
                           (compare_thresholded_maps, sqlitesink, [('dice', "dice",),
                                                                   ('jaccard', 'jaccard'),
                                                                   ('volume_difference', 'volume_difference')]),
+                          (thresholded_maps_distance, sqlitesink, [('distance', "distance")]),
                           (subjects_infosource, sqlitesink, [('subject_id', 'subject_id')]),
                           (tasks_infosource, sqlitesink, [('task_name', 'task_name'),
                                                           (('task_name', getStatLabels), 'contrast_name')]),
                           (thr_method_infosource, sqlitesink, [('thr_method','thr_method')]),
                           
                           (compare_thresholded_maps, plot_diff, [('diff_file', "overlay")]),
+                          (compare_thresholded_maps, just_the_overlap, [('diff_file', "in_file")]),
                           (compare_datagrabber, plot_diff, [('T1', 'background')]),
                           (compare_thresholded_maps, make_titles_diff, [('dice', 'dice'),
                                                                         ('jaccard', 'jaccard'),
@@ -146,6 +157,7 @@ within_subjects_pipeline_noroi.connect([(tasks_infosource, dilate_roi_mask, [(('
 compare_datagrabber = within_subjects_pipeline_noroi.get_node("compare_datagrabber")
 sqlitesink = within_subjects_pipeline_noroi.get_node("sqlitesink")
 compare_thresholded_maps = within_subjects_pipeline_noroi.get_node("compare_thresholded_maps")
+thresholded_maps_distance = within_subjects_pipeline_noroi.get_node("thresholded_maps_distance")
 
 compare_datagrabber.inputs.roi = False
 sqlitesink.inputs.roi = False
@@ -170,6 +182,9 @@ def return_false(whatever):
 within_subjects_pipeline_noroi.connect([(reslice_roi_mask, select_mask, [(('coregistered_source', prepend_by_undefiend),'inlist')]),
                                         (masked_comparison_infosource, select_mask, [(('masked_comparison', chooseindex_bool),'index')]),
                                         (select_mask, compare_thresholded_maps, [('out', 'mask_volume')]),
+                                        (select_mask, thresholded_maps_distance, [('out', 'mask_volume')]),
+#                                        (reslice_roi_mask, compare_thresholded_maps, [('coregistered_source', 'mask_volume')]),
+#                                        (reslice_roi_mask, thresholded_maps_distance, [('coregistered_source', 'mask_volume')]),
                                         (masked_comparison_infosource, sqlitesink, [('masked_comparison', 'masked_comparison'),
                                                                                     (('masked_comparison',return_false), 'roi')])])
 

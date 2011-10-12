@@ -425,13 +425,13 @@ def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = T
     
     return model_pipeline
 
-pipeline = create_skip_and_slice_time_piepeline()
-pipeline.write_graph()
-pipeline.run(plugin_args={'n_procs': 4})
-
-pipeline = create_realign_and_coregister_pipeline()
-pipeline.write_graph()
-pipeline.run(plugin_args={'n_procs': 4})
+#pipeline = create_skip_and_slice_time_piepeline()
+#pipeline.write_graph()
+#pipeline.run(plugin_args={'n_procs': 4})
+#
+#pipeline = create_realign_and_coregister_pipeline()
+#pipeline.write_graph()
+#pipeline.run(plugin_args={'n_procs': 4})
 
 datasource_dartel = pe.MapNode(interface=nio.DataGrabber(infields=['subject_id'],
                                                          outfields=['struct']),
@@ -584,7 +584,6 @@ level1.connect([(datasource_dartel, dartel_workflow, [('struct','inputspec.struc
                 (subjects_infosource, func_datasource, [('subject_id', 'subject_id')]),
                 (get_session_id, func_datasource, [('session_id', 'session_id')]),
                 
-                (subjects_infosource, func_datasource, [("subject_id", "subject_id")]),
                 (tasks_infosource, func_datasource, [("task_name", "task_name")]),
                 (sessions_infosource, func_datasource, [("session", "session")]),
                 
@@ -617,7 +616,9 @@ level1.connect([(datasource_dartel, dartel_workflow, [('struct','inputspec.struc
                 (func_datasource, get_onsets, [('line_bisection_log', 'line_bisection_log')]),
                 (get_onsets, model_pipeline, [('onsets', 'inputnode.onsets')]),
                 
-                (model_pipeline, datasink, [('contrastestimate.con_images', 'volumes.con_images')])
+                (model_pipeline, datasink, [('contrastestimate.con_images', 'volumes.con_images')]),
+                (model_pipeline, datasink, [('contrastestimate.spmT_images', 'volumes.spmT_images')]),
+                (model_pipeline, datasink, [('level1estimate.mask_image', 'volumes.mask_image')]),
                 ])
 level1.write_graph()
 level1.run(plugin_args={'n_procs': 4})
